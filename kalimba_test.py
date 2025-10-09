@@ -1,0 +1,1110 @@
+'''
+questions
+
+Unprefixed 指令中的 Subword (B) and Subword ADD (A) 的RegA描述看上去不一样, 我想知道这是不是指:当RegA为Null时,Null替换成FP
+
+Table 6-33中提到了XOR, 但是没有 XOR (B), XOR (A)没有K因此不适用于这个表格
+
+FP mem access 中 K6u 的解释为 (top 8 values signed) ,这是什么意思
+
+POPM and RTS 指令在Table 6-27没有 Extend K ,但是在Table 6-28有. 这是为什么,这要如何处理
+
+'''
+from struct import unpack
+from binaryninja.binaryview import BinaryView
+from binaryninja.enums import SegmentFlag
+
+from typing import Callable, List, Type, Optional, Dict, Tuple, NewType, Union
+
+from binaryninja.architecture import Architecture, InstructionInfo, RegisterInfo
+from binaryninja.lowlevelil import LowLevelILFunction
+from binaryninja.function import InstructionTextToken
+from binaryninja.enums import InstructionTextTokenType,FlagRole,BranchType,LowLevelILFlagCondition
+from binaryninja.callingconvention import CallingConvention
+from binaryninja.log import log_info
+import enum
+
+bank1_2_3 = [
+    'Null','rMAC','r0','r1','r2','r3','r4','r5','r6','r7','r8','r9','r10','rLink','rFlags','rMACB',
+    'I0','I1','I2','I3','I4','I5','I6','I7','M0','M1','M2','M3','L0','L1','L4','L5',
+    'rMAC2','rMAC1','rMAC0','DoLoopStart','DoLoopEnd','DivResult','DivRemainder','rMACB2','rMACB1','rMACB0','B0','B1','B4','B5','FP','SP'
+]
+cond_3bit_map_to_4bit = [0,1,3,10,11,12,13,15]
+
+cond_4bit = [
+    'Z/EQ', 'NZ/NE',
+    'C/NB', 'NC/B',
+    'NEG', 'POS',
+    'V', 'NV',
+    'HI', 'LS',
+    'GE', 'LT',
+    'GT', 'LE',
+    'USERDEF', 'Always'
+]
+stack_instructions = ['pushm', 'pushc','push', 'popm', 'popm_rts', 'pop']
+rw_data_instructions = [
+'=MBS','=MBU','=MHS','=MHU','=M',
+'MB','MH','M'
+]
+al_instructions = [
+    'AND',
+    'OR',
+    'XOR',
+    '-',
+    '+',
+    'mv',
+    'LSHIFT',
+    'ASHIFT',
+    'IMULT',
+    'SE8',
+    'SE16',
+    '/'
+]
+program_flow_instructions = [
+    'call',
+    'call(m)',
+    'jump',
+    'jump(m)',
+    'do',
+    'do(m)'
+]
+pushm_reg_bitmap = [
+    0x0000,0x0002,0x0006,0x000e,0x001e,0x003e,0x007e,0x00fe,
+    0x0100,0x0004,0x000c,0x001c,0x003c,0x007c,0x00fc,0x01fc,
+    0x0200,0x0008,0x0018,0x0038,0x0078,0x00f8,0x01f8,0x03f8,
+    0x0400,0x0010,0x0030,0x0070,0x00f0,0x01f0,0x03f0,0x07f0,
+    0x0800,0x0020,0x0060,0x00e0,0x01e0,0x03e0,0x07e0,0x0fe0,
+    0x1000,0x0040,0x00c0,0x01c0,0x03c0,0x07c0,0x0fc0,0x1fc0,
+    0x8000,0x0080,0x0180,0x0380,0x0780,0x0f80,0x1f80,0x3f80]
+#no XOR?
+k5_logical_immediate = [
+    0x1,0x2,0x3,0x4,0x7,0x8,0xF,0x10,
+    0x1F,0x20,0x3F,0x40,0x7F,0x80,0xFF,0x100,
+    0x1FF,0x200,0x3FF,0x400,0x7FF,0x800,0xFFF,0x1000,
+    0x7FFF,0x8000,0xFFFF,0x10000,0xFFFFF,0x7FF0000,0x7FFFFFF,0x80000000
+]
+k5_shift_immediate = [
+    -1,-2,-3,-4,-5,-6,-7,-8,
+    -12,-14,-16,-20,-22,-24,-31,-32,
+    1,2,3,4,5,6,7,8,
+    12,14,16,20,22,24,31,32,
+]
+def get_mask(length):
+    return ((1<<(length))-1)
+def get_bits(instruction,offset,length):
+    return (instruction>>offset)&get_mask(length)
+def get_5bit_reg(index):
+    return bank1_2_3[index]
+def get_3bit_reg(index):
+    return bank1_2_3[index]
+def get_3bit_cond(index):
+    return cond_4bit[cond_3bit_map_to_4bit[index]]
+def get_4bit_cond(index):
+    return cond_4bit[index]
+#TODO rw_data_sel size Table 5-2 Table 5-3
+def get_rw_data_sel(rw_data_sel):
+    return rw_data_instructions[rw_data_sel]
+def nbits_unsigned_to_signed(x, bits):
+    if (x & (1 << (bits- 1))) != 0:
+        return -(((~x)&((1<<bits)-1))+1)
+    else:
+        return x
+class stack_instructions_param():
+    def __init__(self):
+        self.sp_adjust = 0
+        self.reg_list = []
+class rw_data_instructions_param():
+    def __init__(self):
+        self.bits = 32
+        self.add = True
+class al_instructions_param():
+    def __init__(self):
+        self.bits = 32
+        self.use_carry = False
+class program_flow_instructions_param():
+    def __init__(self):
+        self.cond = ''
+class kalimba_minim_instr_type(enum.IntEnum):
+    TYPE_A = 0
+    TYPE_B = 1
+    TYPE_NO_REGB_K = 3
+
+
+class kalimba_minim_instr():
+    param: Union[stack_instructions_param,rw_data_instructions_param,al_instructions_param,program_flow_instructions_param]
+    def __init__(self):
+        self.instr_type = kalimba_minim_instr_type.TYPE_A
+        self.regc = ''
+        self.rega = ''
+        self.op = ''
+        self.regb_k = ''
+        self.param = None
+        self.length = 0
+class KALIMBA(Architecture):
+    name = 'KALIMBA'
+    address_size = 4
+    default_int_size = 4
+    instr_alignment = 2
+    max_instr_length = 8
+    regs = {
+        #bank1
+        'Null': RegisterInfo('Null', 9),
+        'rMAC': RegisterInfo('rMAC', 9),
+
+        'r0': RegisterInfo('r0', 4),
+        'r1': RegisterInfo('r1', 4),
+        'r2': RegisterInfo('r2', 4),
+        'r3': RegisterInfo('r3', 4),
+        'r4': RegisterInfo('r4', 4),
+        'r5': RegisterInfo('r5', 4),
+        'r6': RegisterInfo('r6', 4),
+        'r7': RegisterInfo('r7', 4),
+        'r8': RegisterInfo('r8', 4),
+        'r9': RegisterInfo('r9', 4),
+        'r10': RegisterInfo('r10', 4),
+
+        'rLink': RegisterInfo('rLink', 4),
+        'rFlags': RegisterInfo('rFlags', 4),
+
+        'rMACB': RegisterInfo('rMACB', 9),
+        #bank2
+        'I0': RegisterInfo('I0', 4),
+        'I1': RegisterInfo('I1', 4),
+        'I2': RegisterInfo('I2', 4),
+        'I3': RegisterInfo('I3', 4),
+        'I4': RegisterInfo('I4', 4),
+        'I5': RegisterInfo('I5', 4),
+        'I6': RegisterInfo('I6', 4),
+        'I7': RegisterInfo('I7', 4),
+
+        'M0': RegisterInfo('M0', 4),
+        'M1': RegisterInfo('M1', 4),
+        'M2': RegisterInfo('M2', 4),
+        'M3': RegisterInfo('M3', 4),
+
+        'L0': RegisterInfo('L0', 4),
+        'L1': RegisterInfo('L1', 4),
+        'L4': RegisterInfo('L4', 4),
+        'L5': RegisterInfo('L5', 4),
+        #bank3
+        'rMAC2': RegisterInfo('rMAC', 1, 64),
+        'rMAC1': RegisterInfo('rMAC', 4, 32),
+        'rMAC0': RegisterInfo('rMAC', 4, 0),
+
+        'DoLoopStart': RegisterInfo('DoLoopStart', 4),
+        'DoLoopEnd': RegisterInfo('DoLoopEnd', 4),
+        'DivResult': RegisterInfo('DivResult', 4),
+        'DivRemainder': RegisterInfo('DivRemainder', 4),
+
+        'rMACB2': RegisterInfo('rMACB', 1, 64),
+        'rMACB1': RegisterInfo('rMACB', 4, 32),
+        'rMACB0': RegisterInfo('rMACB', 4, 0),
+
+        'B0': RegisterInfo('B0', 4),
+        'B1': RegisterInfo('B1', 4),
+        'B4': RegisterInfo('B4', 4),
+        'B5': RegisterInfo('B5', 4),
+
+        'FP': RegisterInfo('FP', 4),
+        'SP': RegisterInfo('SP', 4),
+    }
+    '''
+    flag_roles = {
+        'Z': FlagRole.ZeroFlagRole,
+        'C': FlagRole.CarryFlagRole,
+        'N': FlagRole.SpecialFlagRole,
+        'V': FlagRole.OverflowFlagRole,
+    }
+    '''
+    stack_pointer = 'SP'
+    link_reg = 'rLink'
+    minim_offset = 0#0x180
+    
+    def get_instruction_info(self, data:bytes, addr:int) -> Optional[InstructionInfo]:
+        result = InstructionInfo()
+        description = self._get_instruction(data, addr)
+        if not description:
+            result.length = 2
+            return result
+        result.length = description.length
+        if True:
+            if description.op in program_flow_instructions:
+                if description.instr_type == kalimba_minim_instr_type.TYPE_B:
+                    if 'jump'in description.op:
+                        if description.param and description.param.cond != '':
+                            result.add_branch(BranchType.TrueBranch, description.regb_k + addr)
+                            result.add_branch(BranchType.FalseBranch, addr + description.length)
+                        else:
+                            result.add_branch(BranchType.UnconditionalBranch, description.regb_k + addr)
+                    elif 'call'in description.op:
+                        result.add_branch(BranchType.CallDestination, description.regb_k + addr)
+                else:
+                    if 'call'in description.op and 'Null' in description.regc:
+                        result.add_branch(BranchType.FunctionReturn)
+        return result
+    def _padding(self, s=''):
+        return InstructionTextToken(InstructionTextTokenType.TextToken, f'{s} ')
+    #InstructionToken 
+    def get_instruction_text(self, data: bytes, addr: int) -> Optional[Tuple[List[InstructionTextToken], int]]:
+        description = self._get_instruction(data, addr)
+        ops = []
+        if not description:
+            return None
+        if description.op == '':
+            return ops, description.length
+        if description.op in stack_instructions:
+            if description.op == 'pushm':
+                ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, 'pushm'))
+                ops.append(self._padding())
+                ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '<'))
+                for reg in description.param.reg_list:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, reg))
+                    ops.append(self._padding(','))
+                ops.pop()
+                ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '>'))
+                if description.param.sp_adjust > 0:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, 'SP'))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '='))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, 'SP'))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '+'))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(description.param.sp_adjust), description.param.sp_adjust))
+            elif description.op == 'pushc':
+                ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, 'push'))
+                ops.append(self._padding())
+                ops.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(description.regb_k), description.regb_k))
+            elif description.op == 'popm':
+                if description.param.sp_adjust < 0:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, 'SP'))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '='))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, 'SP'))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '-'))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(-description.param.sp_adjust), description.param.sp_adjust))
+                ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, 'popm'))
+                ops.append(self._padding())
+                ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '<'))
+                for reg in description.param.reg_list:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, reg))
+                    ops.append(self._padding(','))
+                ops.pop()
+                ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '>'))
+            elif description.op == 'popm_rts':
+                if description.param.sp_adjust < 0:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, 'SP'))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '='))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, 'SP'))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '-'))
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(-description.param.sp_adjust), description.param.sp_adjust))
+                ops.append(self._padding())
+                ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, 'popm_rts'))
+                ops.append(self._padding())
+                ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '<'))
+                for reg in description.param.reg_list:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, reg))
+                    ops.append(self._padding(','))
+                ops.pop()
+                ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '>'))
+        elif description.op in rw_data_instructions:            
+            if '=' in description.op:
+                ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regc))
+                ops.append(self._padding())
+                ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '='))
+                ops.append(self._padding())
+                ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, description.op[1:]))
+                ops.append(InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, '['))
+                ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.rega))
+                ops.append(self._padding())
+                if description.param and description.param.add == False:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '-'))
+                else:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '+'))
+                ops.append(self._padding())
+                if description.instr_type == kalimba_minim_instr_type.TYPE_A:
+                    if isinstance(description.regb_k, int):
+                        log_info(f'type error{hex(addr)}')
+                        return None
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regb_k))
+                else:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(description.regb_k), description.regb_k))
+                ops.append(InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ']'))
+            else:
+                ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, description.op))
+                ops.append(InstructionTextToken(InstructionTextTokenType.BeginMemoryOperandToken, '['))
+                ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.rega))
+                ops.append(self._padding())
+                if description.param and description.param.add == False:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '-'))
+                else:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '+'))
+                ops.append(self._padding())
+                if description.instr_type == kalimba_minim_instr_type.TYPE_A:
+                    if isinstance(description.regb_k, int):
+                        log_info(f'type error{hex(addr)}')
+                        return None
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regb_k))
+                else:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(description.regb_k), description.regb_k))
+                ops.append(InstructionTextToken(InstructionTextTokenType.EndMemoryOperandToken, ']'))
+                ops.append(self._padding())
+                ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '='))
+                ops.append(self._padding())
+                ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regc))
+        elif description.op in al_instructions:
+            ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regc))
+            ops.append(self._padding())
+            ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '='))
+            ops.append(self._padding())
+            ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.rega))
+            if description.op != 'mv':
+                ops.append(self._padding())
+                ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, description.op))
+                ops.append(self._padding())
+            if description.instr_type == kalimba_minim_instr_type.TYPE_B:
+                ops.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(description.regb_k), description.regb_k))
+            else:
+
+                ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regb_k))
+
+        elif description.op in program_flow_instructions:
+            if description.param and description.param.cond != '':
+                ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, 'if'))
+                ops.append(self._padding())
+                ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, description.param.cond))
+                ops.append(self._padding())
+            ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, description.op))
+            ops.append(self._padding())
+            if description.instr_type == kalimba_minim_instr_type.TYPE_B:
+                ops.append(InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(description.regb_k+addr) ,description.regb_k+addr))
+            else:
+                ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regc))
+        else:
+            ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, description.op))
+
+        return ops, description.length # len of instruction
+
+    def get_instruction_low_level_il(self, data: bytes, addr: int, il: LowLevelILFunction) -> Optional[int]:
+        #tmp = il.reg(1, 'A')
+        #tmp = il.add_carry
+        #tmp = il.set_reg(1, 'A', tmp)
+        return None
+    def _get_instruction(self, data: bytes, addr: int):
+        prefixs = []
+        offset = 0
+        if len(data) < 2:
+            return None
+        (instr, ) = unpack('<H',data[offset:offset+2])
+        #log_info(f'instr :{hex(instr)} len{len(data)}')
+        offset += 2
+        opcode = get_bits(instr,12,4)
+        
+        while opcode == 0b1111:# PREFIX
+            prefixs.append(get_bits(instr,0,12))
+            if len(data) < offset + 2:
+                return None
+            (instr, ) = unpack('<H',data[offset:offset+2])
+            offset += 2
+            opcode = get_bits(instr, 12, 4)
+
+        len_prefixs = len(prefixs)
+        description = kalimba_minim_instr()
+        description.length = offset
+        if len_prefixs == 0:#Unprefixed
+            options = get_bits(instr,9,3)
+            regb = get_bits(instr,6,3)
+            rega = get_bits(instr,3,3)
+            regc = get_bits(instr,0,3)
+            if opcode == 0b0000:# ADD/SUB (A) SE8 SE16 MOV/ADD (A)
+                if (options & 0b100) == 0b000:#ADD/SUB (A)
+                    description.regc = get_3bit_reg(regc)
+                    description.rega = get_3bit_reg(rega)
+                    if (options & 0b010) == 0b000:
+                        description.op = '+'
+                    else:
+                        description.op = '-'
+                    description.regb_k = get_3bit_reg(regb)
+                    param = al_instructions_param()
+                    param.use_carry = True
+                    description.param = param
+
+                elif options == 0b100 and regb == 0:#SE8
+                    description.instr_type = kalimba_minim_instr_type.TYPE_NO_REGB_K
+                    description.regc = get_3bit_reg(regc)
+                    description.rega = get_3bit_reg(rega)
+                    description.op = 'SE8'
+
+
+                elif options == 0b110 and regb == 0:#SE16
+                    description.instr_type = kalimba_minim_instr_type.TYPE_NO_REGB_K
+                    description.regc = get_3bit_reg(regc)
+                    description.rega = get_3bit_reg(rega)
+                    description.op = 'SE16'
+
+
+                else:#MOV/ADD (A)
+                    RegCBank = (get_bits(instr,8,2)<<3)+regc
+                    RegABank = (get_bits(instr,6,2)<<3)+rega
+                    description.regc = get_5bit_reg(RegCBank)
+                    if get_bits(instr,10,1) == 1:
+                        description.rega = description.regc
+                        description.op = '+'
+                    else:
+                        description.op = 'mv'
+                    description.regb_k = get_5bit_reg(RegABank)
+
+
+            elif (opcode & 0b1110) == 0b0010:# ADD/SUB (B)
+                K = (get_bits(instr, 11, 2) << 4) + get_bits(instr, 6, 4)
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+                description.regc = get_3bit_reg(regc)
+                description.rega = get_3bit_reg(rega)
+                if (options & 0b010) == 0b000:
+                    description.op = '+'
+                else:
+                    description.op = '-'
+                description.regb_k = K
+
+
+            elif (opcode & 0b1011) == 0b0001 and rega == 0:# Reg=FP+K
+                K = (get_bits(instr,14,1) << 6) + get_bits(instr,6,6)
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+                description.regc = get_3bit_reg(regc)
+                description.rega = 'FP'
+                description.op = '+'
+                description.regb_k = K
+
+
+            elif opcode == 0b0001:# AND (A),OR (A),XOR (A),LSHIFT (A),ASHIFT (A),IMULT (A), PUSHM
+                description.regc = get_3bit_reg(regc)
+                description.rega = get_3bit_reg(rega)
+                description.regb_k = get_3bit_reg(regb)
+                if options == 0b000:
+                    description.op = 'AND'
+                elif options == 0b001:
+                    description.op = 'OR'
+                elif options == 0b010:
+                    description.op = 'XOR'
+                elif options == 0b011:
+                    description.op = 'LSHIFT'
+                elif options == 0b100:
+                    description.op = 'ASHIFT'
+                elif options == 0b101:
+                    description.op = 'IMULT'
+
+
+                else:#PUSHM
+                    reg_bitmap = pushm_reg_bitmap[get_bits(instr,0,6) - 8]
+                    FP = get_bits(instr,6,1)
+                    rLink = get_bits(instr,7,1)
+                    param = stack_instructions_param()
+                    SP_adj = get_bits(instr,8,2)
+                    description.op = 'pushm'
+                    if FP == 1:
+                        param.reg_list.append('FP')
+                    for i in range(16):
+                        if ((reg_bitmap >> i) & 1) != 0:
+                            param.reg_list.append(get_3bit_reg(i))
+                    if rLink == 1:
+                        param.reg_list.append('rLink')
+                    param.sp_adjust = SP_adj * 16
+                    description.param = param
+
+
+            elif opcode == 0b0100:
+                if (options & 0b100) == 0b000:#IMULT (B)
+                    description.instr_type = kalimba_minim_instr_type.TYPE_B
+                    description.regc = get_3bit_reg(regc)
+                    description.rega = get_3bit_reg(rega)
+                    description.regb_k = get_bits(instr,6,5)
+                    description.op = 'IMULT'
+
+
+                elif (options & 0b110) == 0b100:# POPM
+                    reg_bitmap = pushm_reg_bitmap[get_bits(instr,0,6) - 8]
+                    FP = get_bits(instr,6,1)
+                    rLink = get_bits(instr,7,1)
+                    SP_adj = get_bits(instr,8,2)
+                    description.op = 'popm'
+                    param = stack_instructions_param()
+                    if FP == 1:
+                        param.reg_list.append('FP')
+                    for i in range(16):
+                        if ((reg_bitmap >> i) & 1) != 0:
+                            param.reg_list.append(get_3bit_reg(i))
+                    if rLink == 1:
+                        param.reg_list.append('rLink')
+                    param.sp_adjust = -SP_adj * 16
+                    description.param = param
+
+
+                elif options == 0b110 and regb == 0b000:# DOLOOP
+                    description.instr_type = kalimba_minim_instr_type.TYPE_B
+                    description.op = 'do'
+                    description.regb_k = get_bits(instr, 0, 6)#if addr: 5d4 k6u: 2, loop to 5d8
+                    if (description.regb_k & 1) != 0:
+                        description.op = 'do(m)'
+                        description.regb_k -= 1
+                    description.regb_k *= 2
+                    description.regb_k += 2
+                elif options == 0b110 and regb == 0b001:# SP=SP+K
+                    description.instr_type = kalimba_minim_instr_type.TYPE_B
+                    description.regc = 'SP'
+                    description.rega = 'SP'
+                    description.regb_k = nbits_unsigned_to_signed(get_bits(instr,0,6),6)
+                    description.regb_k *= 4
+                    description.op = '+'
+
+
+                elif options == 0b110 and regb == 0b010:#Div = RegC/RegA
+                    description.regc = 'Div'
+                    description.rega = get_3bit_reg(regc)
+                    description.regb_k = get_3bit_reg(rega)
+                    description.op = '/'
+
+
+                elif options == 0b110 and regb == 0b011 and (rega & 0b110) == 0b000:#RegC=DivRes or Rem
+                    description.op = 'mv'
+                    description.regc = get_3bit_reg(regc)
+                    if get_bits(instr,3,1) == 1:
+                        description.rega = 'DivRemainder'
+                    else:
+                        description.rega = 'DivResult'
+
+
+                elif options == 0b110 and regb == 0b011 and (rega & 0b110) == 0b010:#CALL RegC
+                    description.op = 'call'
+                    description.regc = get_3bit_reg(regc)
+
+
+                elif options == 0b110 and regb == 0b011 and (rega & 0b110) == 0b011:#JUMP RegC
+                    description.op = 'jump(m)'
+                    description.regc = get_3bit_reg(regc)
+
+
+                elif options == 0b111:#CALL K9
+                    description.op = 'call'
+                    description.regb_k = get_bits(instr,0,9) * 2
+                    description.instr_type = kalimba_minim_instr_type.TYPE_B
+
+
+            elif opcode == 0b0101:#LSHIFT (B) ASHIFT(B)
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+                description.regb_k = k5_shift_immediate[get_bits(instr,6,5)]
+                description.regc = get_3bit_reg(regc)
+                description.rega = get_3bit_reg(rega)
+                if get_bits(instr,11,1) == 0:
+                    description.op = 'LSHIFT'
+                else:
+                    description.op = 'ASHIFT'
+
+
+            elif opcode == 0b0110:#JUMP K9 (cond)
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+                description.op = 'jump(m)'
+                description.regb_k = get_bits(instr,0,9) * 2
+                param = program_flow_instructions_param()
+                param.cond = get_3bit_cond(options)
+                description.param = param
+
+
+            elif opcode == 0b0111:#MOV/ADD (B)
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+                description.regc = get_5bit_reg((get_bits(instr,8,2)<<3)+regc)
+                if get_bits(instr,10,1) == 1:
+                    description.rega = description.regc
+                    description.op = '+'
+                else:
+                    description.op = 'mv'
+                sig = (get_bits(instr,11,1) << 5)
+                description.regb_k = nbits_unsigned_to_signed(sig + get_bits(instr, 3, 5), 6)
+
+
+
+            elif (opcode & 0b1100) == 0b1000:#Subword (B)
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+                description.regb_k = (get_bits(instr,12,2)<<3) + regb
+                if rega == 0:
+                    description.rega = 'FP'
+                else:
+                    description.rega = get_3bit_reg(rega)
+                description.regc = get_3bit_reg(regc)
+                rw_data_sel = get_bits(instr,9,3)
+                description.op = get_rw_data_sel(rw_data_sel)
+
+
+            elif opcode == 0b1100:#AND (B) OR (B)
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+                description.regc = get_3bit_reg(regc)
+                description.rega = get_3bit_reg(rega)
+                description.regb_k = k5_logical_immediate[get_bits(instr,6,5)]
+                if get_bits(instr,11,1) == 0:
+                    description.op = 'AND'
+                else:
+                    description.op = 'OR'
+
+
+            elif opcode == 0b1101:#FP mem access
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+                description.rega = 'FP'
+                description.regc = get_3bit_reg(regc)
+                description.regb_k = get_bits(instr, 3, 6)
+                rw_data_sel = get_bits(instr, 9, 3)
+                description.op = get_rw_data_sel(rw_data_sel)
+                if 'H' in description.op:
+                    description.regb_k *= 2
+                elif 'B' in description.op:
+                    pass
+                else:
+                    description.regb_k *= 4
+
+
+            elif opcode == 0b1110:#Subword ADD (A)
+                description.rega = get_3bit_reg(rega)
+                '''
+                if description.rega == 'Null':
+                    description.rega = 'FP'
+                '''
+                description.regc = get_3bit_reg(regc)
+                description.regb_k = get_3bit_reg(regb)
+                rw_data_sel = get_bits(instr, 9, 3)
+                description.op = get_rw_data_sel(rw_data_sel)
+
+        else:#prefixed
+            prefix = prefixs[-1]
+            if len_prefixs >= 2:
+                pre_prefix = prefixs[-2]
+            if len_prefixs >= 3:
+                pre_pre_prefix = prefixs[-3]
+            rega = get_bits(prefix,4,4)
+            regc = get_bits(prefix,0,4)
+            if (opcode & 0b1110) == 0b0000:#AND (B)
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+                #log_info('AND (B)')
+                K13 = get_bits(instr, 0, 13)
+                K4 = get_bits(prefix,8,4)
+                K = (K4 << 13) + K13
+
+                main_code_and_prefix_len = 17
+                pre_prefix_len = 12
+                pre_pre_prefix_len = 5
+                total_len = main_code_and_prefix_len
+                sign_extended = False
+                if (K & (1<<(main_code_and_prefix_len - 1))) != 0:
+                    sign_extended = True
+
+                if len_prefixs >= 2:
+                    sign_extended = False
+                    K += (pre_prefix << main_code_and_prefix_len)
+                    total_len += pre_prefix_len
+                    if (K & (1 << (main_code_and_prefix_len + pre_prefix_len - 1))) != 0:
+                        sign_extended = True
+
+                if len_prefixs >= 3:
+                    sign_extended = False
+                    K += (pre_pre_prefix << (main_code_and_prefix_len + pre_prefix_len))
+                    total_len += pre_pre_prefix_len
+                    if (K & (1 << (main_code_and_prefix_len + pre_prefix_len + pre_pre_prefix_len - 1))) != 0:
+                        sign_extended = True
+
+                if total_len < 32:
+                    total_len = 32
+
+                if sign_extended:
+                    for i in range(total_len):
+                        if (K & (1 << (total_len - i))) == 0:
+                            K += (1 << (total_len - i))
+                        else:
+                            break
+                description.regb_k = K
+                #TODO >MAX32bit
+                description.op = 'AND'
+                description.regc = get_5bit_reg(regc)
+                description.rega = get_5bit_reg(rega)
+
+
+            elif (opcode & 0b1110) == 0b0010:#ADD/SUB (B)
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+
+                K = (get_bits(prefix, 8, 2) << 12) + (get_bits(instr, 11, 2) << 10 ) + get_bits(instr, 0, 10)
+
+                main_code_and_prefix_len = 14
+                pre_prefix_len = 12
+                pre_pre_prefix_len = 5
+                total_len = main_code_and_prefix_len
+                sign_extended = False
+                if (K & (1<<(main_code_and_prefix_len - 1))) != 0:
+                    sign_extended = True
+
+                if len_prefixs >= 2:
+                    sign_extended = False
+                    K += (pre_prefix << main_code_and_prefix_len)
+                    total_len += pre_prefix_len
+                    if (K & (1 << (main_code_and_prefix_len + pre_prefix_len - 1))) != 0:
+                        sign_extended = True
+
+                if len_prefixs >= 3:
+                    sign_extended = False
+                    K += (pre_pre_prefix << (main_code_and_prefix_len + pre_prefix_len))
+                    total_len += pre_pre_prefix_len
+                    if (K & (1 << (main_code_and_prefix_len + pre_prefix_len + pre_pre_prefix_len - 1))) != 0:
+                        sign_extended = True
+
+                if total_len < 32:
+                    total_len = 32
+
+                if sign_extended:
+                    for i in range(total_len):
+                        if (K & (1 << (total_len - i))) == 0:
+                            K += (1 << (total_len - i))
+                        else:
+                            break
+                description.regb_k = K
+
+                if get_bits(instr, 10, 1) == 1:
+                    description.op = '-'
+                else:
+                    description.op = '+'
+                regc += get_bits(prefix, 11, 1) << 4
+                rega += get_bits(prefix, 10, 1) << 4
+                description.regc = get_5bit_reg(regc)
+                description.rega = get_5bit_reg(rega)
+
+
+            elif (opcode & 0b1100) == 0b0100 and regc + (get_bits(prefix, 11, 1) << 4) != 0:#MOV/ADD (B)
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+
+                K = (get_bits(prefix, 4, 7) << 13) + (get_bits(instr, 11, 3) << 10 ) + get_bits(instr, 0, 10)
+
+                main_code_and_prefix_len = 20
+                pre_prefix_len = 12
+                pre_pre_prefix_len = 5
+                total_len = main_code_and_prefix_len
+                sign_extended = False
+                if (K & (1<<(main_code_and_prefix_len - 1))) != 0:
+                    sign_extended = True
+                #diff :Table 6-27 Table 6-28
+                # 80f7b1f87c6b -> I1 = 0x1777c
+                # 80f7b1f87c6b -> I1 = 0x7801777C
+
+                if len_prefixs >= 2:
+                    sign_extended = False
+                    K += (pre_prefix << main_code_and_prefix_len)
+                    total_len += pre_prefix_len
+                    if (K & (1 << (main_code_and_prefix_len + pre_prefix_len - 1))) != 0:
+                        sign_extended = True
+
+                if total_len < 32:
+                    total_len = 32
+
+                if sign_extended:
+                    for i in range(total_len):
+                        if (K & (1 << (total_len - i))) == 0:
+                            K += (1 << (total_len - i))
+                        else:
+                            break
+                description.regb_k = K
+                regc += get_bits(prefix, 11, 1) << 4
+                description.regc = get_5bit_reg(regc)
+                if get_bits(instr, 10, 1) == 1:
+                    description.rega = description.regc
+                    description.op = '+'
+                else:
+                    description.op = 'mv'
+                
+
+            elif (opcode & 0b1100) == 0b1000:#Subword (B)
+                description.instr_type = kalimba_minim_instr_type.TYPE_B
+
+                rw_data_sel = get_bits(instr,9,3)
+
+                K = (get_bits(prefix,8,2)<<11) + (get_bits(instr,12,2)<<9) + get_bits(instr,0,9)
+
+                main_code_and_prefix_len = 13
+                pre_prefix_len = 12
+                pre_pre_prefix_len = 7
+                total_len = main_code_and_prefix_len
+                sign_extended = False
+                if (K & (1<<(main_code_and_prefix_len - 1))) != 0:
+                    sign_extended = True
+
+                if len_prefixs >= 2:
+                    sign_extended = False
+                    K += (pre_prefix << main_code_and_prefix_len)
+                    total_len += pre_prefix_len
+                    if (K & (1 << (main_code_and_prefix_len + pre_prefix_len - 1))) != 0:
+                        sign_extended = True
+
+                if len_prefixs >= 3:
+                    sign_extended = False
+                    K += (pre_pre_prefix << (main_code_and_prefix_len + pre_prefix_len))
+                    total_len += pre_pre_prefix_len
+                    if (K & (1 << (main_code_and_prefix_len + pre_prefix_len + pre_pre_prefix_len - 1))) != 0:
+                        sign_extended = True
+
+                description.op = get_rw_data_sel(rw_data_sel)
+                if 'H' in description.op:
+                    total_len += 1
+                    K *= 2
+                elif 'B' in description.op:
+                    pass
+                else:
+                    total_len += 2
+                    K *= 4
+
+                total_len += 2
+                if total_len < 32:
+                    total_len = 32
+
+                if sign_extended:
+                    for i in range(total_len):
+                        if (K & (1 << (total_len - i))) == 0:
+                            K += (1 << (total_len - i))
+                        else:
+                            break
+
+                description.regb_k = K
+                
+                regc += get_bits(prefix, 11, 1) << 4
+                rega += get_bits(prefix, 10, 1) << 4
+                description.regc = get_5bit_reg(regc)
+                description.rega = get_5bit_reg(rega)
+            
+            
+            elif (opcode & 0b1110) == 0b1100:#INSERT32
+                description.op = 'INSERT32'
+
+
+            elif (opcode & 0b1111) == 0b1110:
+                options2 = get_bits(instr,4,4)
+                if (options2&0b1110) == 0b0000:#Subword mem ADD
+                    param = rw_data_instructions_param()
+                    description.regb_k = get_5bit_reg(get_bits(instr,0,5))
+                    if get_bits(prefix, 8, 1) == 0:
+                        param.add = False
+
+                    rw_data_sel = get_bits(instr,9,3)
+                    description.op = get_rw_data_sel(rw_data_sel)
+                    regc += get_bits(prefix, 11, 1) << 4
+                    rega += get_bits(prefix, 10, 1) << 4    
+                    description.regc = get_5bit_reg(regc)
+                    description.rega = get_5bit_reg(rega)
+                    description.param = param
+
+
+                elif (options2&0b1000) == 0b1000:#JUMP (B)
+                    description.op = 'jump'
+                    description.instr_type = kalimba_minim_instr_type.TYPE_B
+                    K = (get_bits(prefix, 4, 8) << 11) + (get_bits(instr, 8, 4) << 7) + get_bits(instr, 0, 7)
+                    main_code_and_prefix_len = 19
+                    pre_prefix_len = 12
+                    total_len = main_code_and_prefix_len
+                    sign_extended = False
+                    if (K & (1<<(main_code_and_prefix_len - 1))) != 0:
+                        sign_extended = True
+                    if len_prefixs >= 2:
+                        sign_extended = False
+                        K += (pre_prefix << main_code_and_prefix_len)
+                        total_len += pre_prefix_len
+                        if (K & (1 << (main_code_and_prefix_len + pre_prefix_len - 1))) != 0:
+                            sign_extended = True
+                    if (K & 1) != 0:
+                        description.op = 'jump(m)'
+                        K -= 1
+                    if total_len < 32:
+                        total_len = 32
+
+                    if sign_extended:
+                        for i in range(total_len):
+                            if (K & (1 << (total_len - i))) == 0:
+                                K += (1 << (total_len - i))
+                            else:
+                                break
+
+                    param = program_flow_instructions_param()
+                    param.cond = get_4bit_cond(regc)
+                    description.param = param
+                    description.regb_k = K
+
+
+                elif (options2&0b1110) == 0b0010:#CALL (B)
+                    description.op = 'call'
+                    description.instr_type = kalimba_minim_instr_type.TYPE_B
+                    param = program_flow_instructions_param()
+                    K = (prefix << 9) + (get_bits(instr, 8, 4) << 5) + get_bits(instr, 0, 5)
+                    main_code_and_prefix_len = 21
+                    pre_prefix_len = 8
+                    total_len = main_code_and_prefix_len
+                    sign_extended = False
+                    if (K & (1<<(main_code_and_prefix_len - 1))) != 0:
+                        sign_extended = True
+                    if len_prefixs >= 2:
+                        sign_extended = False
+                        param.cond = get_4bit_cond(get_bits(pre_prefix, 0, 4))
+                        K += (get_bits(pre_prefix, 4, pre_prefix_len) << main_code_and_prefix_len)
+                        total_len += pre_prefix_len
+                        if (K & (1 << (main_code_and_prefix_len + pre_prefix_len - 1))) != 0:
+                            sign_extended = True
+                    if (K & 1) != 0:
+                        description.op = 'call(m)'
+                        K -= 1
+                    if total_len < 32:
+                        total_len = 32
+                    
+                    if sign_extended:
+                        for i in range(total_len):
+                            if (K & (1 << (total_len - i))) == 0:
+                                K += (1 << (total_len - i))
+                            else:
+                                break
+                    description.param = param
+                    #print(hex(nbits_unsigned_to_signed(K,32)+0xc4aa))
+                    description.regb_k = nbits_unsigned_to_signed(K, 32)
+                    #print(hex(description.regb_k))
+                elif (options2&0b1111) == 0b0101:#PUSH Constant
+                    description.instr_type = kalimba_minim_instr_type.TYPE_B
+                    description.op = 'pushc'
+                    K = (prefix << 8) + (get_bits(instr, 8, 4) << 4) + get_bits(instr, 0, 4)
+                    main_code_and_prefix_len = 20
+                    pre_prefix_len = 8
+                    total_len = main_code_and_prefix_len
+                    sign_extended = False
+                    if (K & (1<<(main_code_and_prefix_len - 1))) != 0:
+                        sign_extended = True
+                    if len_prefixs >= 2:
+                        sign_extended = False
+                        K += (get_bits(pre_prefix, 4, pre_prefix_len) << main_code_and_prefix_len)
+                        total_len += pre_prefix_len
+                        if (K & (1 << (main_code_and_prefix_len + pre_prefix_len - 1))) != 0:
+                            sign_extended = True
+
+                    if total_len < 32:
+                        total_len = 32
+
+                    if sign_extended:
+                        for i in range(total_len):
+                            if (K & (1 << (total_len - i))) == 0:
+                                K += (1 << (total_len - i))
+                            else:
+                                break
+                    description.regb_k = K
+
+
+                elif (options2&0b1111) == 0b0100:
+                    bank_sel = get_bits(instr,10,2)
+                    if bank_sel == 0b11:#DOLOOP
+                        description.op = 'do'
+                        description.instr_type = kalimba_minim_instr_type.TYPE_B
+                        K = (prefix << 3) + get_bits(instr, 0, 3)
+                        main_code_and_prefix_len = 15
+                        pre_prefix_len = 12
+                        total_len = main_code_and_prefix_len
+                        sign_extended = False
+                        if (K & (1<<(main_code_and_prefix_len - 1))) != 0:
+                            sign_extended = True
+                        if len_prefixs >= 2:
+                            sign_extended = False
+                            K += (pre_prefix << main_code_and_prefix_len)
+                            total_len += pre_prefix_len
+                            if (K & (1 << (main_code_and_prefix_len + pre_prefix_len - 1))) != 0:
+                                sign_extended = True
+
+                        if total_len < 32:
+                            total_len = 32
+
+                        if sign_extended:
+                            for i in range(total_len):
+                                if (K & (1 << (total_len - i))) == 0:
+                                    K += (1 << (total_len - i))
+                                else:
+                                    break
+                        description.regb_k = K
+
+
+                    else:#PUSHM
+                        description.op = 'pushm'
+                        param = stack_instructions_param()
+                        param.sp_adjust = get_bits(instr, 8, 2) * 16
+                        bitfield = (prefix << 4) + get_bits(instr,0,4)
+                        for i in range(16):
+                            if ((bitfield >> i) & 1) == 1:
+                                param.reg_list.append(bank1_2_3[bank_sel * 16 + i])
+                        description.param = param
+
+                        
+                elif (options2&0b1110) == 0b0110:#POPM and RTS
+                    description.op = 'popm_rts'
+                    bank_sel = get_bits(instr,10,2)
+                    param = stack_instructions_param()
+                    param.sp_adjust = get_bits(instr, 8, 2) * 16
+                    bitfield = (prefix << 4) + get_bits(instr,0,4)
+                    for i in range(16):
+                        if ((bitfield >> i) & 1) == 1:
+                            param.reg_list.append(bank1_2_3[bank_sel * 16 + i])
+                    description.param = param
+
+
+        return description
+class KALIMBAView(BinaryView):
+    name = 'KALIMBAView'
+    long_name = 'KALIMBAView ROM'
+
+    def __init__(self, data):
+        BinaryView.__init__(self, parent_view = data, file_metadata = data.file)
+        # self.platform = Architecture['KALIMBA'].standalone_platform
+        self.data = data
+        self.platform = Architecture[KALIMBA.name].standalone_platform
+        self.arch = Architecture[KALIMBA.name]
+        self._entry_point = 0x5e2 - 0x180#462
+        #self._entry_point = 0x9e5c - 0x180#9CDC
+        
+    @classmethod
+    def is_valid_for_data(self, data):
+        return True
+
+    def perform_get_address_size(self):
+        return KALIMBA.address_size
+
+    def init(self):
+
+        self.add_auto_segment(
+            0, self.data.length,
+            0, self.data.length, 
+            SegmentFlag.SegmentReadable|SegmentFlag.SegmentExecutable)
+        self.add_entry_point(self._entry_point)
+        
+        return True
+
+    def perform_is_executable(self):
+        return True
+
+    def perform_get_entry_point(self):
+        return self._entry_point
+
+class DefaultCallingConvention(CallingConvention):
+    name = 'default'
+    int_arg_regs = ['r0', 'r1', 'r2', 'r3']
+    int_return_reg = 'r0'
+    high_int_return_reg = 'r0'
+
+KALIMBA.register()
+#arch = Architecture[KALIMBA.name]
+#arch.register_calling_convention(DefaultCallingConvention(arch, 'default'))
+#arch.standalone_platform.default_calling_convention = arch.calling_conventions['default']
+KALIMBAView.register()
+
+#print(Architecture['KALIMBA'].get_instruction_text(bytes.fromhex('00f032cf'), 0))
+if __name__ == '__main__':
+    testk = KALIMBA()
+    #print(testk.get_instruction_text(bytes.fromhex('e27b'), 0))
+    #print(testk.get_instruction_text(bytes.fromhex('20f001f38ca2'),0))
+    print(testk.get_instruction_text(bytes.fromhex('f5ff39ed'), 0xc32a))

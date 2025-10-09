@@ -1,0 +1,4 @@
+*.xuv
+*.txt
+*.bin
+__pycache__
