@@ -24,10 +24,10 @@ class KALIMBAView(BinaryView):
             self._initc_v_offset = 0x2df8 # in reset_minim
             self._initc_flash_offset = 0x700920c0 #in reset_minim
 
-            self._const_file_offset = 0x89062 # refer p1, after _trapset_bitmap_length
+            self._const_file_offset = 0x89062 # refer p1, after 16 00 71 48 D8 4C
             self._const_len = self._initc_file_offset - self._const_file_offset
             self._const_flash_offset = self._initc_flash_offset - self._initc_len - self._const_len
-            self._mem_start = 0x70000000
+            self._mem_start = 0
         else:
             self._entry_point = 0x5e2
 
@@ -40,7 +40,7 @@ class KALIMBAView(BinaryView):
             self._const_len = self._initc_file_offset - self._const_file_offset
             self._const_flash_offset = self._initc_flash_offset - self._initc_len - self._const_len
 
-            self._mem_start = 0x78000000
+            self._mem_start = 0x40000
     @classmethod
     def is_valid_for_data(self, data):
         return True
@@ -75,4 +75,3 @@ class KALIMBAView(BinaryView):
 
     def perform_get_entry_point(self):
         return self._entry_point+self._entry_point_base
-#1b9ac _init_pmalloc

@@ -2,3 +2,4 @@
 *.txt
 *.bin
 __pycache__
+kalimba_test.py
