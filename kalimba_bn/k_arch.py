@@ -244,16 +244,27 @@ class KALIMBA(Architecture):
             ops.append(self._padding())
             ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '='))
             ops.append(self._padding())
-            ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.rega))
-            if description.op != 'mv':
-                ops.append(self._padding())
+            if description.param and description.param.shift_reverse:
+                if description.instr_type == kalimba_minim_instr_type.TYPE_B:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(description.regb_k), description.regb_k))
+                    ops.append(self._padding())
+                else:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regb_k))
+                    ops.append(self._padding())
                 ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, description.op))
                 ops.append(self._padding())
-            if description.instr_type == kalimba_minim_instr_type.TYPE_B:
-                ops.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(description.regb_k), description.regb_k))
+                ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.rega))
             else:
-                
-                ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regb_k))
+                ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.rega))
+                if description.op != 'mv':
+                    ops.append(self._padding())
+                    ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, description.op))
+                    ops.append(self._padding())
+                if description.instr_type == kalimba_minim_instr_type.TYPE_B:
+                    ops.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(description.regb_k), description.regb_k))
+                else:
+                    
+                    ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regb_k))
 
         elif description.op in program_flow_instructions:
             if description.param and description.param.cond != '':

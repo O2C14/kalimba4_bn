@@ -44,6 +44,7 @@ class al_instructions_param():
     def __init__(self):
         self.bits = 32
         self.use_carry = False
+        self.shift_reverse = False
 class program_flow_instructions_param():
     def __init__(self):
         self.cond = ''

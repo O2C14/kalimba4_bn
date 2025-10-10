@@ -67,6 +67,7 @@ def get_type_b_disassembly_description(opcode, regc, rega, k, description:kalimb
     description.instr_type = kalimba_minim_instr_type.TYPE_B
     description.rega = get_4bit_reg(rega)
     description.regc = get_4bit_reg(regc)
+    description.regb_k = k
     if (opcode >> 4) == 0b00:
         if ((opcode>>3)&1) == 1:
             pass
@@ -83,6 +84,16 @@ def get_type_b_disassembly_description(opcode, regc, rega, k, description:kalimb
     elif opcode == 0b110100:
         description.op = '=M'
         description.regb_k = k #unsigned?
+    elif opcode == 0b111010:
+        description.op = 'LSHIFT'
+        param = al_instructions_param()
+        param.shift_reverse = True
+        description.param = param
+    elif opcode == 0b111011:
+        description.op = 'ASHIFT'
+        param = al_instructions_param()
+        param.shift_reverse = True
+        description.param = param
     elif opcode == 0b111100:#Table 6-17
         options = rega >> 2
         bank_sel = rega & 0b11
@@ -604,10 +615,10 @@ def get_disassembly_description(data: bytes, addr: int):
             if maxm_instr_type == 0b00:#type A
                 maxm_instr = (get_bits(instr, 0, 12) << 20) + (get_bits(prefix, 8, 4) << 16) + get_bits(prefix, 0, 8)
                 #print('a')
-                description.op += 'A'
+                description.op += f'A {opcode:b}'
             if maxm_instr_type == 0b01:#type B
                 #print('b')
-                description.op += 'B'
+                description.op += f'B {opcode:b}'
                 
                 regc = get_bits(instr, 0, 4)
                 rega = get_bits(prefix, 8, 4)
@@ -629,9 +640,9 @@ def get_disassembly_description(data: bytes, addr: int):
                 get_type_b_disassembly_description(opcode, regc, rega, K, description)
             if maxm_instr_type == 0b10:#type C
                 #print('c')
-                description.op += 'C'
+                description.op += f'C {opcode:b}'
                 pass
-            description.op += f'{opcode:b}'
+
 
             
         elif (opcode & 0b1111) == 0b1110:
