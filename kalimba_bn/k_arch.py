@@ -140,6 +140,7 @@ class KALIMBA(Architecture):
                 ops.pop()
                 ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '>'))
                 if description.param.sp_adjust > 0:
+                    ops.append(self._padding())
                     ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, 'SP'))
                     ops.append(self._padding())
                     ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '='))
@@ -169,6 +170,7 @@ class KALIMBA(Architecture):
                     ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, '-'))
                     ops.append(self._padding())
                     ops.append(InstructionTextToken(InstructionTextTokenType.IntegerToken, hex(-description.param.sp_adjust), description.param.sp_adjust))
+                    ops.append(self._padding())
                 ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, 'popm'))
                 ops.append(self._padding())
                 ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, '<'))
@@ -265,7 +267,7 @@ class KALIMBA(Architecture):
                 ops.append(InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(description.regb_k+addr) ,description.regb_k+addr))
             else:
                 ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regc))
-        else:
+        elif description.is_insert32:
             ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, description.op))
 
         return ops, description.length # len of instruction

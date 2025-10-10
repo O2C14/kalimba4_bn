@@ -64,9 +64,25 @@ def nbits_unsigned_to_signed(x, bits):
 
 def get_type_b_disassembly_description(opcode, regc, rega, k, description:kalimba_minim_instr):
     #print(opcode)
+    description.instr_type = kalimba_minim_instr_type.TYPE_B
+    description.rega = get_4bit_reg(rega)
+    description.regc = get_4bit_reg(regc)
     if (opcode >> 4) == 0b00:
         if ((opcode>>3)&1) == 1:
             pass
+    elif opcode == 0b100000:
+        description.op = 'AND'
+    elif opcode == 0b100001:
+        description.op = 'OR'
+    elif opcode == 0b100010:
+        description.op = 'XOR'
+    elif opcode == 0b100011:
+        description.op = 'LSHIFT'
+    elif opcode == 0b100100:
+        description.op = 'ASHIFT'
+    elif opcode == 0b110100:
+        description.op = '=M'
+        description.regb_k = k #unsigned?
     elif opcode == 0b111100:#Table 6-17
         options = rega >> 2
         bank_sel = rega & 0b11
@@ -78,7 +94,7 @@ def get_type_b_disassembly_description(opcode, regc, rega, k, description:kalimb
                 description.op = '+'
             else:
                 description.op = '-'
-            description.instr_type = kalimba_minim_instr_type.TYPE_B
+            
             if options == 0b00:
                 if regc == 0:
                     description.regc = 'SP'
@@ -582,14 +598,17 @@ def get_disassembly_description(data: bytes, addr: int):
         
         elif (opcode & 0b1110) == 0b1100:#INSERT32
             description.is_insert32 = True
-            description.op = 'INSERT32'
+            description.op = 'INSERT32 '
             maxm_instr_type = get_bits(instr, 4, 2)
+            opcode = get_bits(instr, 6, 6)
             if maxm_instr_type == 0b00:#type A
                 maxm_instr = (get_bits(instr, 0, 12) << 20) + (get_bits(prefix, 8, 4) << 16) + get_bits(prefix, 0, 8)
                 #print('a')
+                description.op += 'A'
             if maxm_instr_type == 0b01:#type B
                 #print('b')
-                opcode = get_bits(instr, 6, 6)
+                description.op += 'B'
+                
                 regc = get_bits(instr, 0, 4)
                 rega = get_bits(prefix, 8, 4)
                 if len_prefixs == 1:
@@ -610,8 +629,11 @@ def get_disassembly_description(data: bytes, addr: int):
                 get_type_b_disassembly_description(opcode, regc, rega, K, description)
             if maxm_instr_type == 0b10:#type C
                 #print('c')
+                description.op += 'C'
                 pass
+            description.op += f'{opcode:b}'
 
+            
         elif (opcode & 0b1111) == 0b1110:
             options2 = get_bits(instr,4,4)
             if (options2&0b1110) == 0b0000:#Subword mem ADD
@@ -648,6 +670,7 @@ def get_disassembly_description(data: bytes, addr: int):
                 if (K & 1) != 0:
                     description.op = 'jump(m)'
                     K -= 1
+                '''
                 if total_len < 32:
                     total_len = 32
 
@@ -657,11 +680,11 @@ def get_disassembly_description(data: bytes, addr: int):
                             K += (1 << (total_len - i))
                         else:
                             break
-
+                '''
                 param = program_flow_instructions_param()
                 param.cond = get_4bit_cond(regc)
                 description.param = param
-                description.regb_k = K
+                description.regb_k = nbits_unsigned_to_signed(K, total_len)
 
 
             elif (options2&0b1110) == 0b0010:#CALL (B)
@@ -685,6 +708,7 @@ def get_disassembly_description(data: bytes, addr: int):
                 if (K & 1) != 0:
                     description.op = 'call(m)'
                     K -= 1
+                '''
                 if total_len < 32:
                     total_len = 32
                 
@@ -694,8 +718,10 @@ def get_disassembly_description(data: bytes, addr: int):
                             K += (1 << (total_len - i))
                         else:
                             break
+                '''
+
                 description.param = param
-                description.regb_k = nbits_unsigned_to_signed(K, 32)
+                description.regb_k = nbits_unsigned_to_signed(K, total_len)
 
 
             elif (options2&0b1111) == 0b0101:#PUSH Constant
