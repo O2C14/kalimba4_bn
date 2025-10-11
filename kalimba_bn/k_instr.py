@@ -25,7 +25,8 @@ program_flow_instructions = [
     'jump',
     'jump(m)',
     'do',
-    'do(m)'
+    'do(m)',
+    'rts'
 ]
 class kalimba_minim_instr_type(enum.IntEnum):
     TYPE_A = 0

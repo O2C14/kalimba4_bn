@@ -307,14 +307,17 @@ def get_disassembly_description(data: bytes, addr: int):
                     description.rega = 'DivResult'
 
 
-            elif options == 0b110 and regb == 0b011 and (rega & 0b110) == 0b010:#CALL RegC
+            elif options == 0b110 and regb == 0b011 and (rega & 0b111) == 0b010:#CALL RegC
                 description.op = 'call'
                 description.regc = get_3bit_reg(regc)
 
 
-            elif options == 0b110 and regb == 0b011 and (rega & 0b110) == 0b011:#JUMP RegC
-                description.op = 'jump(m)'
-                description.regc = get_3bit_reg(regc)
+            elif options == 0b110 and regb == 0b011 and (rega & 0b111) == 0b011:#JUMP RegC
+                if regc == 0:
+                    description.op = 'rts'
+                else:
+                    description.op = 'jump'
+                    description.regc = get_3bit_reg(regc)
 
 
             elif options == 0b111:#CALL K9
