@@ -273,10 +273,10 @@ class KALIMBA(Architecture):
                 ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, description.param.cond))
                 ops.append(self._padding())
             ops.append(InstructionTextToken(InstructionTextTokenType.InstructionToken, description.op))
-            ops.append(self._padding())
             if description.instr_type == kalimba_minim_instr_type.TYPE_B:
+                ops.append(self._padding())
                 ops.append(InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(description.regb_k+addr) ,description.regb_k+addr))
-            else:
+            elif description.regc != '':
                 ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regc))
         elif description.is_insert32:
             ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, description.op))

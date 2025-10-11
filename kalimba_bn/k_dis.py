@@ -307,18 +307,21 @@ def get_disassembly_description(data: bytes, addr: int):
                     description.rega = 'DivResult'
 
 
-            elif options == 0b110 and regb == 0b011 and (rega & 0b110) == 0b010:#CALL RegC
+            elif options == 0b110 and regb == 0b011 and (rega & 0b111) == 0b010:#CALL RegC
                 description.op = 'call'
                 description.regc = get_3bit_reg(regc)
 
 
-            elif options == 0b110 and regb == 0b011 and (rega & 0b110) == 0b011:#JUMP RegC
-                description.op = 'jump(m)'
-                description.regc = get_3bit_reg(regc)
+            elif options == 0b110 and regb == 0b011 and (rega & 0b111) == 0b011:#JUMP RegC
+                if regc == 0:
+                    description.op = 'rts'
+                else:
+                    description.op = 'jump'
+                    description.regc = get_3bit_reg(regc)
 
 
             elif options == 0b111:#CALL K9
-                description.op = 'call'
+                description.op = 'call(m)' # FIXME: is this correct?
                 k9u = get_bits(instr, 0, 9)
                 description.regb_k = nbits_unsigned_to_signed(k9u, 9) * 2
                 description.instr_type = kalimba_minim_instr_type.TYPE_B
@@ -603,6 +606,10 @@ def get_disassembly_description(data: bytes, addr: int):
             
             regc += get_bits(prefix, 11, 1) << 4
             rega += get_bits(prefix, 10, 1) << 4
+
+            if rega == 14: # 'rFlags'
+                rega = 14 + (2 << 4)
+
             description.regc = get_5bit_reg(regc)
             description.rega = get_5bit_reg(rega)
         
@@ -650,13 +657,15 @@ def get_disassembly_description(data: bytes, addr: int):
             if (options2&0b1110) == 0b0000:#Subword mem ADD
                 param = rw_data_instructions_param()
                 description.regb_k = get_5bit_reg(get_bits(instr,0,5))
-                if get_bits(prefix, 8, 1) == 0:
+                if get_bits(instr, 8, 1) == 1:
                     param.add = False
 
                 rw_data_sel = get_bits(instr,9,3)
                 description.op = get_rw_data_sel(rw_data_sel)
                 regc += get_bits(prefix, 11, 1) << 4
                 rega += get_bits(prefix, 10, 1) << 4    
+                if rega == 14: # 'rFlags'
+                    rega = 14 + (2 << 4)
                 description.regc = get_5bit_reg(regc)
                 description.rega = get_5bit_reg(rega)
                 description.param = param
