@@ -606,6 +606,10 @@ def get_disassembly_description(data: bytes, addr: int):
             
             regc += get_bits(prefix, 11, 1) << 4
             rega += get_bits(prefix, 10, 1) << 4
+
+            if rega == 14: # 'rFlags'
+                rega = 14 + (2 << 4)
+
             description.regc = get_5bit_reg(regc)
             description.rega = get_5bit_reg(rega)
         
@@ -660,6 +664,8 @@ def get_disassembly_description(data: bytes, addr: int):
                 description.op = get_rw_data_sel(rw_data_sel)
                 regc += get_bits(prefix, 11, 1) << 4
                 rega += get_bits(prefix, 10, 1) << 4    
+                if rega == 14: # 'rFlags'
+                    rega = 14 + (2 << 4)
                 description.regc = get_5bit_reg(regc)
                 description.rega = get_5bit_reg(rega)
                 description.param = param
