@@ -321,7 +321,7 @@ def get_disassembly_description(data: bytes, addr: int):
 
 
             elif options == 0b111:#CALL K9
-                description.op = 'call'
+                description.op = 'call(m)' # FIXME: is this correct?
                 k9u = get_bits(instr, 0, 9)
                 description.regb_k = nbits_unsigned_to_signed(k9u, 9) * 2
                 description.instr_type = kalimba_minim_instr_type.TYPE_B
