@@ -85,7 +85,7 @@ class KALIMBAView(BinaryView):
                 0, self.data.length,
                 0, self.data.length,
                 SegmentFlag.SegmentReadable | SegmentFlag.SegmentExecutable)
-
+            self.add_entry_point(self._entry_point + self._entry_point_base) # optional
         
         return True
 
@@ -93,4 +93,4 @@ class KALIMBAView(BinaryView):
         return True
 
     def perform_get_entry_point(self):
-        return self._entry_point+self._entry_point_base
+        return self._entry_point + self._entry_point_base
