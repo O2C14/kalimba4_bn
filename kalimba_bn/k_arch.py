@@ -97,19 +97,24 @@ class KALIMBA(Architecture):
             result.length = 2
             return result
         result.length = description.length
-        if True:
+        if True:# False indicates linear sweep.
             if description.op in program_flow_instructions:
                 if description.instr_type == kalimba_minim_instr_type.TYPE_B:
-                    if 'jump'in description.op:
+                    if 'jump' in description.op:
                         if description.param and description.param.cond != '' and description.param.cond != 'Always':
                             result.add_branch(BranchType.TrueBranch, description.regb_k + addr)
                             result.add_branch(BranchType.FalseBranch, addr + description.length)
                         else:
                             result.add_branch(BranchType.UnconditionalBranch, description.regb_k + addr)
-                    elif 'call'in description.op:
-                        result.add_branch(BranchType.CallDestination, description.regb_k + addr)
+                    elif 'call' in description.op:
+                        if description.param and description.param.cond != '':
+                            # It should be 'TrueCallDestination'
+                            result.add_branch(BranchType.TrueBranch, description.regb_k + addr)
+                            result.add_branch(BranchType.FalseBranch, addr + description.length)
+                        else:
+                            result.add_branch(BranchType.CallDestination, description.regb_k + addr)
                 else:
-                    if 'call'in description.op and 'Null' in description.regc:
+                    if description.op == 'rts':
                         result.add_branch(BranchType.FunctionReturn)
         return result
     def _padding(self, s=''):
@@ -277,6 +282,7 @@ class KALIMBA(Architecture):
                 ops.append(self._padding())
                 ops.append(InstructionTextToken(InstructionTextTokenType.PossibleAddressToken, hex(description.regb_k+addr) ,description.regb_k+addr))
             elif description.regc != '':
+                ops.append(self._padding())
                 ops.append(InstructionTextToken(InstructionTextTokenType.RegisterToken, description.regc))
         elif description.is_insert32:
             ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, description.op))
