@@ -657,7 +657,7 @@ def get_disassembly_description(data: bytes, addr: int):
             if (options2&0b1110) == 0b0000:#Subword mem ADD
                 param = rw_data_instructions_param()
                 description.regb_k = get_5bit_reg(get_bits(instr,0,5))
-                if get_bits(prefix, 8, 1) == 0:
+                if get_bits(instr, 8, 1) == 1:
                     param.add = False
 
                 rw_data_sel = get_bits(instr,9,3)
