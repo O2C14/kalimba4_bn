@@ -140,12 +140,6 @@ class KalimbaInstrType(IntEnum):
     B = 1 # RegC = RegA OP constant
     C = 2 # RegC = RegC OP RegA <MEM_ACCESS_1> <MEM_ACCESS_2>;
 
-class KalimbaSignSelect(IntEnum):
-    UU = 0b00
-    US = 0b01
-    SU = 0b10
-    SS = 0b11
-
 class KalimbaOp(IntEnum):
     ADD    = 0      # Add
     ADC    = auto() # Add with carry
@@ -238,16 +232,13 @@ class KalimbaBinOp:
     def __str__(self):
         op = self.op.name
         extra = ''
-
         if self.op in binop_symbols:
             (op, extra) = binop_symbols[self.op]
 
-        if self.cond == KalimbaCond.Always:
-            return f'KalimbaBinOp("{self.c} = {self.a} {op} {self.b}{extra}")'
-        else:
-            return f'KalimbaBinOp("if {self.cond.name} {self.c} = {self.a} {op} {self.b}{extra}")'
+        m = f', {self.mem}' if self.mem else ''
+        cond = '' if self.cond == KalimbaCond.Always else f'if {self.cond.name} '
 
-type KalimbaInstruction = Union[KalimbaUnOp, KalimbaBinOp]
+        return f'KalimbaBinOp("{cond}{self.c} = {self.a} {op} {self.b}{extra}{m}")'
 
 def get_mask(length):
     return (1 << length) - 1
@@ -255,7 +246,7 @@ def get_mask(length):
 def get_bits(instruction, offset, length):
     return (instruction >> offset) & get_mask(length)
 
-def kalimba_maxim_decode_a(instruction: int, banka = KalimbaBank1Reg, bankb = KalimbaBank1Reg, bankc = KalimbaBank1Reg) -> KalimbaInstruction:
+def kalimba_maxim_decode_no_regc_a(instruction: int, banka = KalimbaBank1Reg, bankb = KalimbaBank1Reg):
     cond   = KalimbaCond(get_bits(instruction, 0, 4))
     regb   = bankb(get_bits(instruction, 4, 4))
     mag1   = KalimbaBank2Reg(KalimbaBank2Reg.M0.value + get_bits(instruction, 8, 2))
@@ -263,13 +254,18 @@ def kalimba_maxim_decode_a(instruction: int, banka = KalimbaBank1Reg, bankb = Ka
     regag1 = KalimbaBank1Reg(get_bits(instruction, 12, 3))
     ag1w   = bool(get_bits(instruction, 15, 1))
     rega   = banka(get_bits(instruction, 16, 4))
-    regc   = bankc(get_bits(instruction, 20, 4))
 
     mem = KalimbaIndexedMemAccess(ag1w, regag1, iag1, mag1) if regag1 != KalimbaBank1Reg.Null else None
 
+    return (cond, regb, mem, rega)
+
+def kalimba_maxim_decode_a(instruction: int, banka = KalimbaBank1Reg, bankb = KalimbaBank1Reg, bankc = KalimbaBank1Reg):
+    (cond, regb, mem, rega) = kalimba_maxim_decode_no_regc_a(instruction, banka, bankb)
+    regc = bankc(get_bits(instruction, 20, 4))
+
     return (cond, regb, mem, rega, regc)
 
-def kalimba_maxim_decode_unop_bank1_a(instruction: int, op: KalimbaOp) -> KalimbaInstruction:
+def kalimba_maxim_decode_unop_bank1_a(instruction: int, op: KalimbaOp):
     (cond, regb, mem, rega, regc) = kalimba_maxim_decode_a(instruction)
     return KalimbaUnOp(op, regc, rega, cond, mem)
 
@@ -339,6 +335,76 @@ def kalimba_maxim_decode_binop_bank12_a(instruction, op):
 
     return KalimbaBinOp(op, regc, rega, regb, cond, mem)
 
+class KalimbaSignSelect(IntEnum):
+    UU = 0b00
+    US = 0b01
+    SU = 0b10
+    SS = 0b11
+
+@dataclass(unsafe_hash=True)
+class KalimbaExtraAddSub:
+    op: Union[KalimbaOp.ADD, KalimbaOp.SUB]
+    a: KalimbaOperand
+    b: KalimbaOperand
+
+    def __str__(self):
+        op = binop_symbols[self.op][0]
+        return f'{KalimbaBank1Reg.r0} = {self.a} {op} {self.b}'
+
+fused_mul_symbols = {
+    KalimbaOp.FMADD: '+',
+    KalimbaOp.FMSUB: '-',
+}
+
+@dataclass(unsafe_hash=True)
+class KalimbaFusedMultiplyAddSub:
+    '''
+    C = C OP A * B [r = D OP E]
+    '''
+    op: KalimbaOp
+    c: Union[KalimbaBank1Reg.rMAC, KalimbaBank1Reg.rMACB]
+    a: KalimbaBank1Reg
+    b: KalimbaBank1Reg
+    cond: KalimbaCond
+    sign: Optional[KalimbaSignSelect]
+    addsub: Optional[KalimbaBinOp]
+    mem: Optional[KalimbaIndexedMemAccess]
+
+    def __str__(self):
+        m = f', {self.mem}' if self.mem else ''
+        cond = '' if self.cond == KalimbaCond.Always else f'if {self.cond.name} '
+        addsub = f', {self.addsub}' if self.addsub else ''
+        sign = f' ({self.sign.name})' if self.sign else ''
+
+        if self.op in fused_mul_symbols:
+            op = fused_mul_symbols[self.op]
+            return f'KalimbaBinOp("{cond}{self.c} = {self.c} {op} {self.a} * {self.b}{sign}{addsub}{m}")'
+        else:
+            return f'KalimbaBinOp("{cond}{self.c} = {self.a} * {self.b}{sign}{addsub}{m}")'
+
+def kalimba_maxim_decode_fmaddsub_a(instruction, op):
+    (cond, regb, mem, rega) = kalimba_maxim_decode_no_regc_a(instruction)
+
+    addsub = None
+    sign = None
+
+    if get_bits(instruction, 23, 1) == 0:
+        # RegC' = RegC' OP RegA * RegB
+        regc = KalimbaBank1Reg(get_bits(instruction, 20, 3))
+        # Special case: Null is actually rMACB
+        if regc is KalimbaBank1Reg.Null:
+            regc = KalimbaBank1Reg.rMACB
+        sign = KalimbaSignSelect(get_bits(instruction, 26, 2))
+    else:
+        # RegC'' = RegC'' OP RegA * RegB, r0 = RegD OP RegE
+        regc = [KalimbaBank1Reg.rMACB, KalimbaBank1Reg.rMAC, KalimbaBank1Reg.r1, KalimbaBank1Reg.r2][get_bits(instruction, 20, 2)]
+        regd = [KalimbaBank1Reg.r1, KalimbaBank1Reg.r2][get_bits(instruction, 25, 1)]
+        rege = [KalimbaBank1Reg.rMAC, KalimbaBank1Reg.rMACB][get_bits(instruction, 22, 1)]
+        addsub_op = [KalimbaOp.ADD, KalimbaOp.SUB][get_bits(instruction, 24, 1)]
+        addsub = KalimbaExtraAddSub(addsub_op, regd, rege)
+
+    return KalimbaFusedMultiplyAddSub(op, regc, rega, regb, cond, sign, addsub, mem)
+
 # mask, value, operation, decode
 maxim_ops_lut = [
     # Type A
@@ -353,13 +419,11 @@ maxim_ops_lut = [
     (0b111111_11_00000000_00000000_00000000, 0b100_010_00_00000000_00000000_00000000, KalimbaOp.XOR, kalimba_maxim_decode_binop_bank1_a),
     (0b111111_11_00000000_00000000_00000000, 0b100_011_00_00000000_00000000_00000000, KalimbaOp.LSHIFT, kalimba_maxim_decode_binop_bank1_a),
     (0b111111_11_00000000_00000000_00000000, 0b100_100_00_00000000_00000000_00000000, KalimbaOp.ASHIFT, kalimba_maxim_decode_binop_bank1_a),
-
     (0b111111_11_00000000_00000000_00000000, 0b100_110_00_00000000_00000000_00000000, KalimbaOp.IMUL, kalimba_maxim_decode_binop_bank1_a),
     (0b111111_11_00000000_00000000_00000000, 0b100_111_00_00000000_00000000_00000000, KalimbaOp.SMUL, kalimba_maxim_decode_binop_bank1_a),
-
     (0b111111_11_00000000_00000000_00000000, 0b100_101_00_00000000_00000000_00000000, KalimbaOp.FMUL, kalimba_maxim_decode_binop_bank1_a),
-    (0b111100_11_00000000_00000000_00000000, 0b101_000_00_00000000_00000000_00000000, KalimbaOp.FMADD),
-    (0b111100_11_00000000_00000000_00000000, 0b101_100_00_00000000_00000000_00000000, KalimbaOp.FMSUB),
+    (0b111100_11_00000000_00000000_00000000, 0b101_000_00_00000000_00000000_00000000, KalimbaOp.FMADD, kalimba_maxim_decode_fmaddsub_a),
+    (0b111100_11_00000000_00000000_00000000, 0b101_100_00_00000000_00000000_00000000, KalimbaOp.FMSUB, kalimba_maxim_decode_fmaddsub_a),
     (0b111100_11_00000000_00000000_00000000, 0b110_000_00_00000000_00000000_00000000, KalimbaOp.MULX),
     (0b111111_11_00000000_00000000_00000000, 0b110_100_00_00000000_00000000_00000000, KalimbaOp.LOAD),
     (0b111111_11_00000000_00000000_00000000, 0b110_101_00_00000000_00000000_00000000, KalimbaOp.STORE),
@@ -404,6 +468,8 @@ maxim_ops_lut = [
     (0b11111111_11100000_00000000_00000000, 0b11111101_00000000_00000000_00000000, KalimbaOp.PREFIX),
 ]
 
+type KalimbaInstruction = Union[KalimbaUnOp, KalimbaBinOp, KalimbaFusedMultiplyAddSub]
+
 def kalimba_maxim_lookup_op(instruction: int) -> KalimbaInstruction:
     for (mask, value, opcode, *other) in maxim_ops_lut:
         if (instruction & mask) == value:
@@ -440,6 +506,16 @@ if __name__ == '__main__':
     print(kalimba_maxim_lookup_op(0x9834005f))# 5f 00 34 98 | r1 = r2 * r3 (int);
     print(kalimba_maxim_lookup_op(0x9c34005f))# 5f 00 34 9c | r1 = r2 * r3 (int) (sat);
     print(kalimba_maxim_lookup_op(0x9cf4005f))# 5f 00 f4 9c | rMACB = r2 * r3 (int) (sat);
+
+    print(kalimba_maxim_lookup_op(0xac23504f))# 4f 50 23 ac | r0 = r0 + r1 * r2 (SS), r3 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xa4c3504f))# 4f 50 c3 a4 | rMACB = rMACB + r1 * r2, r0 = r1 - rMACB, r3 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xacc5906f))# 6f 90 c5 ac | rMACB = rMACB + r3 * r4, r0 = r2 - rMACB, M[I0,M0] = rMAC;
+
+    print(kalimba_maxim_lookup_op(0xa483504f))# 4f 50 83 a4 | rMACB = rMACB + r1 * r2, r0 = r1 - rMAC, r3 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xac85906f))# 6f 90 85 ac | rMACB = rMACB + r3 * r4, r0 = r2 - rMAC, M[I0,M0] = rMAC;
+    print(kalimba_maxim_lookup_op(0xb0d3504f))# 4f 50 d3 b0 | rMAC = rMAC - r1 * r2, r0 = r1 + rMACB, r3 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xb8d5906f))# 6f 90 d5 b8 | rMAC = rMAC - r3 * r4, r0 = r2 + rMACB, M[I0,M0] = rMAC;
+    print(kalimba_maxim_lookup_op(0xa803504e))# 4e 50 03 a8 | if USERDEF rMACB = rMACB + r1 * r2 (SU), r3 = M[I0,M0];
 
     print(kalimba_maxim_lookup_op(0x581200ef))#ef 00 12 58 | I1 = I2 + FP;
     print(kalimba_maxim_lookup_op(0x541e002f))#2f 00 1e 54 | I1 = FP + I2;
