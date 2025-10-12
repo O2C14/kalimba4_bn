@@ -258,6 +258,11 @@ def kalimba_maxim_decode_unop_bank1_a(instruction: int, op: KalimbaOp) -> Kalimb
 
 def kalimba_maxim_decode_binop_bank1_a(instruction, op):
     (cond, regb, mem, rega, regc) = kalimba_maxim_decode_a(instruction)
+
+    # Special case: rFlags -> rMAC for ASHIFT/LSHIFT
+    if op in [KalimbaOp.LSHIFT, KalimbaOp.ASHIFT] and regc is KalimbaBank1Reg.rFlags:
+        regc = KalimbaBank1Reg.rMAC
+
     return KalimbaBinOp(op, regc, rega, regb, cond, mem)
 
 class KalimbaAddressingMode(IntEnum):
@@ -301,9 +306,19 @@ bank_select_lut = {
     0b111: (KalimbaBank2Reg, KalimbaBank2Reg, KalimbaBank2Reg), # B2 = B2 +- B2 |  K  - B2
 }
 
+assert KalimbaBank1Reg.rFlags == KalimbaBank2Reg.L4
+assert KalimbaBank1Reg.rFlags is not KalimbaBank2Reg.L4
+
 def kalimba_maxim_decode_binop_bank12_a(instruction, op):
     (bankc, banka, bankb) = bank_select_lut[get_bits(instruction, 26, 3)]
     (cond, regb, mem, rega, regc) = kalimba_maxim_decode_a(instruction, banka, bankb, bankc)
+
+    # Special case: rFlags is invalid here, this is actually FP
+    if rega is KalimbaBank1Reg.rFlags:
+        rega = KalimbaBank3Reg.FP
+
+    if regb is KalimbaBank1Reg.rFlags:
+        regb = KalimbaBank3Reg.FP
 
     return KalimbaBinOp(op, regc, rega, regb, cond, mem)
 
@@ -319,8 +334,8 @@ maxim_ops_lut = [
     (0b111111_11_00000000_00000000_00000000, 0b100_000_00_00000000_00000000_00000000, KalimbaOp.AND, kalimba_maxim_decode_binop_bank1_a),
     (0b111111_11_00000000_00000000_00000000, 0b100_001_00_00000000_00000000_00000000, KalimbaOp.OR,  kalimba_maxim_decode_binop_bank1_a),
     (0b111111_11_00000000_00000000_00000000, 0b100_010_00_00000000_00000000_00000000, KalimbaOp.XOR, kalimba_maxim_decode_binop_bank1_a),
-    (0b111111_11_00000000_00000000_00000000, 0b100_011_00_00000000_00000000_00000000, KalimbaOp.LSHIFT),
-    (0b111111_11_00000000_00000000_00000000, 0b100_100_00_00000000_00000000_00000000, KalimbaOp.ASHIFT),
+    (0b111111_11_00000000_00000000_00000000, 0b100_011_00_00000000_00000000_00000000, KalimbaOp.LSHIFT, kalimba_maxim_decode_binop_bank1_a),
+    (0b111111_11_00000000_00000000_00000000, 0b100_100_00_00000000_00000000_00000000, KalimbaOp.ASHIFT, kalimba_maxim_decode_binop_bank1_a),
     (0b111110_11_00000000_00000000_00000000, 0b100_110_00_00000000_00000000_00000000, KalimbaOp.MULS),
     (0b111111_11_00000000_00000000_00000000, 0b100_101_00_00000000_00000000_00000000, KalimbaOp.MULF),
     (0b111100_11_00000000_00000000_00000000, 0b101_000_00_00000000_00000000_00000000, KalimbaOp.FMADD),
@@ -393,6 +408,17 @@ if __name__ == '__main__':
     print(kalimba_maxim_lookup_op(0xe434ba4f))# 4f ba 34 e4 | r1 = ABS r2, M[I2,M2] = r1;
 
     print(kalimba_maxim_lookup_op(0x8834005f))# 5f 00 34 88 | r1 = r2 XOR r3;
+
+    print(kalimba_maxim_lookup_op(0x8cea00b1))# b1 00 ea 8c | if Z rMAC = r8 LSHIFT r9;
+    print(kalimba_maxim_lookup_op(0x90e70090))# 90 00 e7 90 | if EQ rMAC = r5 ASHIFT r7;
+
+    print(kalimba_maxim_lookup_op(0x88170090))# 90 00 17 88 | if EQ rMAC = r5 XOR r7;
+    print(kalimba_maxim_lookup_op(0x00170090))# 90 00 17 00 | if EQ rMAC = r5 + r7;
+    print(kalimba_maxim_lookup_op(0x88e70090))# 90 00 e7 88 | if EQ rFlags = r5 XOR r7;
+
+    print(kalimba_maxim_lookup_op(0x581200ef))#ef 00 12 58 | I1 = I2 + FP;
+    print(kalimba_maxim_lookup_op(0x541e002f))#2f 00 1e 54 | I1 = FP + I2;
+    print(kalimba_maxim_lookup_op(0x4ce1002f))#2f 00 e1 4c | rFlags = I1 + I2;
 
     print(kalimba_maxim_lookup_op(0xdc0d000f))# 0f 00 0d dc | rts; // special case of jump
     print(kalimba_maxim_lookup_op(0xe434002f))# 2f 00 34 e4 | r1 = r2 + 1;
