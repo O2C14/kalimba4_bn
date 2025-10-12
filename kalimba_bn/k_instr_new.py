@@ -74,21 +74,13 @@ class KalimbaSubWordMem(IntEnum):
     S_M   = 0b111 # Store word
 
 @dataclass(unsafe_hash=True)
-class KalimbaMemAccess:
+class KalimbaWordMem:
     '''
-    Reads/writes one word
+    Accesses one word
     '''
-    sub: KalimbaSubWordMem
-    reg: KalimbaReg
-    offset: int
+    reg: KalimbaBank1Reg
     def __str__(self):
-        t = self.sub.name[2:]
-        if self.offset == 0:
-            return f'{t}[{self.reg}]'
-        elif self.offset >= 0:
-            return f'{t}[{self.reg} + {self.offset}]'
-        else:
-            return f'{t}[{self.reg} - {-self.offset}]'
+        return f'M[{self.reg}]'
 
 @dataclass(unsafe_hash=True)
 class KalimbaIndexedMemAccess:
@@ -96,7 +88,7 @@ class KalimbaIndexedMemAccess:
     Reads/writes one word, post increment index by modify
     '''
     write: bool
-    reg: KalimbaReg                  # Any register
+    reg: KalimbaBank1Reg             # r0, r1, r2, r3, r4, r5, and rMAC
     idx: KalimbaBank2Reg             # Ix
     mod: Union[KalimbaBank2Reg, int] # Mx or constant
     def __str__(self):
@@ -105,8 +97,6 @@ class KalimbaIndexedMemAccess:
             return f'{m} = {self.reg}'
         else:
             return f'{self.reg} = {m}'
-
-type KalimbaOperand = Union[KalimbaReg, KalimbaMemAccess, int]
 
 reg_bank_lut = {
     1: KalimbaBank1Reg,
@@ -201,8 +191,8 @@ class KalimbaUnOp:
     C = OP A
     '''
     op: KalimbaOp
-    c: KalimbaOperand
-    a: KalimbaOperand
+    c: KalimbaBank1Reg
+    a: KalimbaBank1Reg
     cond: KalimbaCond
     mem: Optional[KalimbaIndexedMemAccess]
 
@@ -227,15 +217,18 @@ binop_symbols = {
     KalimbaOp.FMUL: ('*', ' (frac)'),
 }
 
+type KalimbaDstOp = Union[KalimbaWordMem, KalimbaBank1Reg, KalimbaBank2Reg]
+type KalimbaSrcOp = Union[KalimbaWordMem, KalimbaBankReg, int]
+
 @dataclass(unsafe_hash=True)
 class KalimbaBinOp:
     '''
     C = A OP B
     '''
     op: KalimbaOp
-    c: KalimbaOperand
-    a: KalimbaOperand
-    b: KalimbaOperand
+    c: KalimbaDstOp
+    a: KalimbaSrcOp
+    b: KalimbaSrcOp
     cond: KalimbaCond
     mem: Optional[KalimbaIndexedMemAccess]
 
@@ -294,15 +287,15 @@ class KalimbaAddressingMode(IntEnum):
     RMR = 0b10 # reg = mem[reg] OP reg/imm
     MRR = 0b11 # mem[r/imm] = reg OP reg
 
+
 R = lambda r: r
-ML = lambda r: KalimbaMemAccess(KalimbaSubWordMem.L_M, r, 0)
-MS = lambda r: KalimbaMemAccess(KalimbaSubWordMem.S_M, r, 0)
+M = lambda r: KalimbaWordMem(r)
 
 addressing_mode_lut = {
-    0b00: ( R,  R,  R), # reg = reg OP reg/imm
-    0b01: ( R,  R, ML), # reg = reg OP mem[reg/imm]
-    0b10: ( R, ML,  R), # reg = mem[reg] OP reg/imm
-    0b11: (MS,  R,  R), # mem[r/imm] = reg OP reg
+    0b00: (R, R, R), # reg = reg OP reg/imm
+    0b01: (R, R, M), # reg = reg OP mem[reg/imm]
+    0b10: (R, M, R), # reg = mem[reg] OP reg/imm
+    0b11: (M, R, R), # mem[r/imm] = reg OP reg
 }
 
 def kalimba_maxim_decode_binop_bank1_a_addsub(instruction, op):
@@ -354,8 +347,8 @@ class KalimbaSignSelect(IntEnum):
 @dataclass(unsafe_hash=True)
 class KalimbaExtraAddSub:
     op: Union[KalimbaOp.ADD, KalimbaOp.SUB]
-    a: KalimbaOperand
-    b: KalimbaOperand
+    a: KalimbaBank1Reg
+    b: KalimbaBank1Reg
 
     def __str__(self):
         op = binop_symbols[self.op][0]
