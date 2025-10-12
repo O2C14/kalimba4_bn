@@ -159,7 +159,8 @@ class KalimbaOp(IntEnum):
     LOAD   = auto() # Load with offset
     STORE  = auto() # Store with offset
     FMAAS  = auto() # Multiply-accumulate + Add/Sub
-    SIGN   = auto() # Sign detect / Block sign detect
+    SIGN   = auto() # Sign detect
+    BSIGN  = auto() # Block sign detect
     DIV    = auto() # Divide
     JUMP   = auto() # Jump
     RTS    = auto() # Return from subroutine
@@ -189,6 +190,11 @@ class KalimbaOp(IntEnum):
     PREFIX = auto() # 32-bit constant prefix
     UNUSED = auto() # Reserved
 
+unop_symbols = {
+    KalimbaOp.SIGN:  'SIGNDET',
+    KalimbaOp.BSIGN: 'BLKSIGNDET',
+}
+
 @dataclass(unsafe_hash=True)
 class KalimbaUnOp:
     '''
@@ -201,11 +207,15 @@ class KalimbaUnOp:
     mem: Optional[KalimbaIndexedMemAccess]
 
     def __str__(self):
+        op = self.op.name
+        if self.op in unop_symbols:
+            op = unop_symbols[self.op]
+
         m = f', {self.mem}' if self.mem else ''
         if self.cond == KalimbaCond.Always:
-            return f'KalimbaUnOp("{self.c} = {self.op.name} {self.a}{m}")'
+            return f'KalimbaUnOp("{self.c} = {op} {self.a}{m}")'
         else:
-            return f'KalimbaUnOp("if {self.cond.name} {self.c} = {self.op.name} {self.a}{m}")'
+            return f'KalimbaUnOp("if {self.cond.name} {self.c} = {op} {self.a}{m}")'
 
 binop_symbols = {
     KalimbaOp.ADD:  ('+', ''),
@@ -427,7 +437,7 @@ maxim_ops_lut = [
     (0b111100_11_00000000_00000000_00000000, 0b110_000_00_00000000_00000000_00000000, KalimbaOp.MULX,  kalimba_maxim_decode_fmaddsub_a),
     (0b111111_11_00000000_00000000_00000000, 0b110_100_00_00000000_00000000_00000000, KalimbaOp.LOAD),
     (0b111111_11_00000000_00000000_00000000, 0b110_101_00_00000000_00000000_00000000, KalimbaOp.STORE),
-    (0b111111_11_00000000_00000000_00000000, 0b110_110_00_00000000_00000000_00000000, KalimbaOp.SIGN),
+    (0b111111_11_00000000_00000000_00000000, 0b110_110_00_00000000_00000000_00000000, KalimbaOp.SIGN, kalimba_maxim_decode_unop_bank1_a),
     (0b111111_11_00000000_00000000_00000000, 0b110_111_00_00000000_00000000_00000000, KalimbaOp.JUMP), # Special cases: RTS/RTI
     (0b111111_11_00000000_00000000_00000000, 0b111_000_00_00000000_00000000_00000000, KalimbaOp.CALL),
     (0b111111_11_00000000_00000000_11110000, 0b111_001_00_00000000_00000000_00100000, KalimbaOp.ADD,   kalimba_maxim_decode_binop_bank1_a_const1), # ADD1
@@ -537,6 +547,8 @@ if __name__ == '__main__':
     print(kalimba_maxim_lookup_op(0xe43400df))# df 00 34 e4 | r1 = r2 - 4;
     print(kalimba_maxim_lookup_op(0xe43400ef))# ef 00 34 e4 | r1 = SE8 r2;
     print(kalimba_maxim_lookup_op(0xe43400ff))# ff 00 34 e4 | r1 = SE16 r2;
+    print(kalimba_maxim_lookup_op(0xd823000f))# 0f 00 23 d8 | r0 = SIGNDET r1;
+
     #print(kalimba_maxim_lookup_op(0x03000000))# Type C
     #print(kalimba_maxim_lookup_op(0x23000000))
     #print(kalimba_maxim_lookup_op(0x01b00004))# Type B
