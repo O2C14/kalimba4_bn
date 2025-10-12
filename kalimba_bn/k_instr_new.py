@@ -741,9 +741,11 @@ maxim_ops_lut: List[Union[Tuple[int, int, KalimbaOp, Callable[[int, KalimbaOp], 
     (0b111111_11_00000000_00000000_00000000, 0b100_000_01_00000000_00000000_00000000, KalimbaOp.AND, kalimba_maxim_decode_binop_bank1_b),
     (0b111111_11_00000000_00000000_00000000, 0b100_001_01_00000000_00000000_00000000, KalimbaOp.OR,  kalimba_maxim_decode_binop_bank1_b),
     (0b111111_11_00000000_00000000_00000000, 0b100_010_01_00000000_00000000_00000000, KalimbaOp.XOR, kalimba_maxim_decode_binop_bank1_b),
-
     (0b111111_11_00000000_00000000_00000000, 0b100_011_01_00000000_00000000_00000000, KalimbaOp.LSHIFT, kalimba_maxim_decode_shift_bank1_b),
     (0b111111_11_00000000_00000000_00000000, 0b100_100_01_00000000_00000000_00000000, KalimbaOp.ASHIFT, kalimba_maxim_decode_shift_bank1_b),
+    (0b111111_11_00000000_00000000_00000000, 0b100_110_01_00000000_00000000_00000000, KalimbaOp.IMUL, kalimba_maxim_decode_binop_bank1_b),
+    (0b111111_11_00000000_00000000_00000000, 0b100_111_01_00000000_00000000_00000000, KalimbaOp.SMUL, kalimba_maxim_decode_binop_bank1_b),
+    (0b111111_11_00000000_00000000_00000000, 0b100_101_01_00000000_00000000_00000000, KalimbaOp.FMUL, kalimba_maxim_decode_binop_bank1_b),
     # Type C
     #(),
 
@@ -875,6 +877,11 @@ if __name__ == '__main__':
     print(kalimba_maxim_lookup_op(0x91e100f9))# f9 00 e1 91 | rMAC = rMAC ASHIFT -7 (MI);
     print(kalimba_maxim_lookup_op(0x91f101f9))# f9 01 f1 91 | rMACB = rMAC ASHIFT -7 (LO);
     print(kalimba_maxim_lookup_op(0x91f100f9))# f9 00 f1 91 | rMACB = rMAC ASHIFT -7 (56bit);
+
+    print(kalimba_maxim_lookup_op(0x991c0007))# 07 00 1c 99 | rMAC = r10 * 7 (int);
+    print(kalimba_maxim_lookup_op(0x9927fff9))# f9 ff 27 99 | r0 = r5 * -7 (int);
+    print(kalimba_maxim_lookup_op(0x9d27fff9))# f9 ff 27 9d | r0 = r5 * -7 (int) (sat);
+    print(kalimba_maxim_lookup_op(0x95274000))# 00 40 27 95 | r0 = r5 * 0.5 (frac);
 
     #print(kalimba_maxim_lookup_op(0xdde0fffe))# fe ff e0 dd | if USERDEF jump BRANCH1;
     #print(kalimba_maxim_lookup_op(0xe1000004))# 04 00 00 e1 | if EQ call BRANCH2;
