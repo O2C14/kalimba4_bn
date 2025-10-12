@@ -156,8 +156,9 @@ class KalimbaOp(IntEnum):
     XOR    = auto() # Logical XOR
     LSHIFT = auto() # Logical Shift
     ASHIFT = auto() # Arithmetical Shift
-    MULS   = auto() # Signed multiply
-    MULF   = auto() # Fractional signed multiply
+    IMUL   = auto() # Signed multiply
+    SMUL   = auto() # Saturated signed multiply
+    FMUL   = auto() # Fractional signed multiply
     FMADD  = auto() # Multiply-accumulate (optional Add/Sub for A/B)
     FMSUB  = auto() # Multiply-subtract (optional Add/Sub for A/B)
     MULX   = auto() # Multiply (optional Add/Sub for A/B)
@@ -212,6 +213,16 @@ class KalimbaUnOp:
         else:
             return f'KalimbaUnOp("if {self.cond.name} {self.c} = {self.op.name} {self.a}{m}")'
 
+binop_symbols = {
+    KalimbaOp.ADD:  ('+', ''),
+    KalimbaOp.ADC:  ('+', ' + Carry'),
+    KalimbaOp.SUB:  ('-', ''),
+    KalimbaOp.SBB:  ('-', ' - Borrow'),
+    KalimbaOp.IMUL: ('*', ' (int)'),
+    KalimbaOp.SMUL: ('*', ' (int) (sat)'),
+    KalimbaOp.FMUL: ('*', ' (frac)'),
+}
+
 @dataclass(unsafe_hash=True)
 class KalimbaBinOp:
     '''
@@ -225,10 +236,16 @@ class KalimbaBinOp:
     mem: Optional[KalimbaIndexedMemAccess]
 
     def __str__(self):
+        op = self.op.name
+        extra = ''
+
+        if self.op in binop_symbols:
+            (op, extra) = binop_symbols[self.op]
+
         if self.cond == KalimbaCond.Always:
-            return f'KalimbaBinOp("{self.c} = {self.a} {self.op.name} {self.b}")'
+            return f'KalimbaBinOp("{self.c} = {self.a} {op} {self.b}{extra}")'
         else:
-            return f'KalimbaBinOp("if {self.cond.name} {self.c} = {self.a} {self.op.name} {self.b}")'
+            return f'KalimbaBinOp("if {self.cond.name} {self.c} = {self.a} {op} {self.b}{extra}")'
 
 type KalimbaInstruction = Union[KalimbaUnOp, KalimbaBinOp]
 
@@ -259,7 +276,7 @@ def kalimba_maxim_decode_unop_bank1_a(instruction: int, op: KalimbaOp) -> Kalimb
 def kalimba_maxim_decode_binop_bank1_a(instruction, op):
     (cond, regb, mem, rega, regc) = kalimba_maxim_decode_a(instruction)
 
-    # Special case: rFlags -> rMAC for ASHIFT/LSHIFT
+    # Special case: rFlags is invalid here, this is actually
     if op in [KalimbaOp.LSHIFT, KalimbaOp.ASHIFT] and regc is KalimbaBank1Reg.rFlags:
         regc = KalimbaBank1Reg.rMAC
 
@@ -336,8 +353,11 @@ maxim_ops_lut = [
     (0b111111_11_00000000_00000000_00000000, 0b100_010_00_00000000_00000000_00000000, KalimbaOp.XOR, kalimba_maxim_decode_binop_bank1_a),
     (0b111111_11_00000000_00000000_00000000, 0b100_011_00_00000000_00000000_00000000, KalimbaOp.LSHIFT, kalimba_maxim_decode_binop_bank1_a),
     (0b111111_11_00000000_00000000_00000000, 0b100_100_00_00000000_00000000_00000000, KalimbaOp.ASHIFT, kalimba_maxim_decode_binop_bank1_a),
-    (0b111110_11_00000000_00000000_00000000, 0b100_110_00_00000000_00000000_00000000, KalimbaOp.MULS),
-    (0b111111_11_00000000_00000000_00000000, 0b100_101_00_00000000_00000000_00000000, KalimbaOp.MULF),
+
+    (0b111111_11_00000000_00000000_00000000, 0b100_110_00_00000000_00000000_00000000, KalimbaOp.IMUL, kalimba_maxim_decode_binop_bank1_a),
+    (0b111111_11_00000000_00000000_00000000, 0b100_111_00_00000000_00000000_00000000, KalimbaOp.SMUL, kalimba_maxim_decode_binop_bank1_a),
+
+    (0b111111_11_00000000_00000000_00000000, 0b100_101_00_00000000_00000000_00000000, KalimbaOp.FMUL, kalimba_maxim_decode_binop_bank1_a),
     (0b111100_11_00000000_00000000_00000000, 0b101_000_00_00000000_00000000_00000000, KalimbaOp.FMADD),
     (0b111100_11_00000000_00000000_00000000, 0b101_100_00_00000000_00000000_00000000, KalimbaOp.FMSUB),
     (0b111100_11_00000000_00000000_00000000, 0b110_000_00_00000000_00000000_00000000, KalimbaOp.MULX),
@@ -415,6 +435,11 @@ if __name__ == '__main__':
     print(kalimba_maxim_lookup_op(0x88170090))# 90 00 17 88 | if EQ rMAC = r5 XOR r7;
     print(kalimba_maxim_lookup_op(0x00170090))# 90 00 17 00 | if EQ rMAC = r5 + r7;
     print(kalimba_maxim_lookup_op(0x88e70090))# 90 00 e7 88 | if EQ rFlags = r5 XOR r7;
+
+    print(kalimba_maxim_lookup_op(0x9434005f))# 5f 00 34 94 | r1 = r2 * r3 (frac);
+    print(kalimba_maxim_lookup_op(0x9834005f))# 5f 00 34 98 | r1 = r2 * r3 (int);
+    print(kalimba_maxim_lookup_op(0x9c34005f))# 5f 00 34 9c | r1 = r2 * r3 (int) (sat);
+    print(kalimba_maxim_lookup_op(0x9cf4005f))# 5f 00 f4 9c | rMACB = r2 * r3 (int) (sat);
 
     print(kalimba_maxim_lookup_op(0x581200ef))#ef 00 12 58 | I1 = I2 + FP;
     print(kalimba_maxim_lookup_op(0x541e002f))#2f 00 1e 54 | I1 = FP + I2;
