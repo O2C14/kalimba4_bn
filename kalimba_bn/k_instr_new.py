@@ -287,7 +287,6 @@ class KalimbaAddressingMode(IntEnum):
     RMR = 0b10 # reg = mem[reg] OP reg/imm
     MRR = 0b11 # mem[r/imm] = reg OP reg
 
-
 R = lambda r: r
 M = lambda r: KalimbaWordMem(r)
 
@@ -381,9 +380,9 @@ class KalimbaFusedMultiplyAddSub:
 
         if self.op in fused_mul_symbols:
             op = fused_mul_symbols[self.op]
-            return f'KalimbaBinOp("{cond}{self.c} = {self.c} {op} {self.a} * {self.b}{sign}{addsub}{m}")'
+            return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.c} {op} {self.a} * {self.b}{sign}{addsub}{m}")'
         else:
-            return f'KalimbaBinOp("{cond}{self.c} = {self.a} * {self.b}{sign}{addsub}{m}")'
+            return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.a} * {self.b}{sign}{addsub}{m}")'
 
 def kalimba_maxim_decode_fmaddsub_a(instruction, op):
     (cond, regb, mem, rega) = kalimba_maxim_decode_no_regc_a(instruction)
@@ -408,6 +407,32 @@ def kalimba_maxim_decode_fmaddsub_a(instruction, op):
 
     return KalimbaFusedMultiplyAddSub(op, regc, rega, regb, cond, sign, addsub, mem)
 
+@dataclass(unsafe_hash=True)
+class KalimbaOffsetMemAccess:
+    '''
+    Reads/writes one word with offset
+    '''
+    op: KalimbaOp
+    c: KalimbaBank1Reg
+    a: KalimbaBank1Reg
+    b: KalimbaBank1Reg
+    cond: KalimbaCond
+    mem: Optional[KalimbaIndexedMemAccess]
+    def __str__(self):
+        m = f', {self.mem}' if self.mem else ''
+        cond = '' if self.cond == KalimbaCond.Always else f'if {self.cond.name} '
+
+        if self.op == KalimbaOp.LOAD:
+            return f'KalimbaOffsetMemAccess("{cond}{self.c} = M[{self.a} + {self.b}]{m}")'
+        elif self.op == KalimbaOp.STORE:
+            return f'KalimbaOffsetMemAccess("{cond}M[{self.a} + {self.b}] = {self.c}{m}")'
+        else:
+            raise ValueError(f'invalid mem op: {self.op}')
+
+def kalimba_maxim_decode_load_store_a(instruction, op):
+    (cond, regb, mem, rega, regc) = kalimba_maxim_decode_a(instruction)
+    return KalimbaOffsetMemAccess(op, regc, rega, regb, cond, mem)
+
 # mask, value, operation, decode
 maxim_ops_lut = [
     # Type A
@@ -428,8 +453,8 @@ maxim_ops_lut = [
     (0b111100_11_00000000_00000000_00000000, 0b101_000_00_00000000_00000000_00000000, KalimbaOp.FMADD, kalimba_maxim_decode_fmaddsub_a),
     (0b111100_11_00000000_00000000_00000000, 0b101_100_00_00000000_00000000_00000000, KalimbaOp.FMSUB, kalimba_maxim_decode_fmaddsub_a),
     (0b111100_11_00000000_00000000_00000000, 0b110_000_00_00000000_00000000_00000000, KalimbaOp.MULX,  kalimba_maxim_decode_fmaddsub_a),
-    (0b111111_11_00000000_00000000_00000000, 0b110_100_00_00000000_00000000_00000000, KalimbaOp.LOAD),
-    (0b111111_11_00000000_00000000_00000000, 0b110_101_00_00000000_00000000_00000000, KalimbaOp.STORE),
+    (0b111111_11_00000000_00000000_00000000, 0b110_100_00_00000000_00000000_00000000, KalimbaOp.LOAD,  kalimba_maxim_decode_load_store_a),
+    (0b111111_11_00000000_00000000_00000000, 0b110_101_00_00000000_00000000_00000000, KalimbaOp.STORE, kalimba_maxim_decode_load_store_a),
     (0b111111_11_00000000_00000000_00000000, 0b110_110_00_00000000_00000000_00000000, KalimbaOp.SIGN, kalimba_maxim_decode_unop_bank1_a),
     (0b111111_11_00000000_00000000_00000000, 0b110_111_00_00000000_00000000_00000000, KalimbaOp.JUMP), # Special cases: RTS/RTI
     (0b111111_11_00000000_00000000_00000000, 0b111_000_00_00000000_00000000_00000000, KalimbaOp.CALL),
@@ -471,7 +496,7 @@ maxim_ops_lut = [
     (0b11111111_11100000_00000000_00000000, 0b11111101_00000000_00000000_00000000, KalimbaOp.PREFIX),
 ]
 
-type KalimbaInstruction = Union[KalimbaUnOp, KalimbaBinOp, KalimbaFusedMultiplyAddSub]
+type KalimbaInstruction = Union[KalimbaUnOp, KalimbaBinOp, KalimbaFusedMultiplyAddSub, KalimbaOffsetMemAccess]
 
 def kalimba_maxim_lookup_op(instruction: int) -> KalimbaInstruction:
     for (mask, value, opcode, *other) in maxim_ops_lut:
@@ -525,6 +550,9 @@ if __name__ == '__main__':
     print(kalimba_maxim_lookup_op(0x581200ef))#ef 00 12 58 | I1 = I2 + FP;
     print(kalimba_maxim_lookup_op(0x541e002f))#2f 00 1e 54 | I1 = FP + I2;
     print(kalimba_maxim_lookup_op(0x4ce1002f))#2f 00 e1 4c | rFlags = I1 + I2;
+
+    print(kalimba_maxim_lookup_op(0xd02140fe))# fe 40 21 d0 | if USERDEF r0 = M[rMAC + rMACB], r2 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xd441a1fe))# fe a1 41 d4 | if USERDEF M[rMAC + rMACB] = r2, M[I0,M1] = r0;
 
     print(kalimba_maxim_lookup_op(0xdc0d000f))# 0f 00 0d dc | rts; // special case of jump
     print(kalimba_maxim_lookup_op(0xe434002f))# 2f 00 34 e4 | r1 = r2 + 1;
