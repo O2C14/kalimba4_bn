@@ -424,7 +424,7 @@ maxim_ops_lut = [
     (0b111111_11_00000000_00000000_00000000, 0b100_101_00_00000000_00000000_00000000, KalimbaOp.FMUL, kalimba_maxim_decode_binop_bank1_a),
     (0b111100_11_00000000_00000000_00000000, 0b101_000_00_00000000_00000000_00000000, KalimbaOp.FMADD, kalimba_maxim_decode_fmaddsub_a),
     (0b111100_11_00000000_00000000_00000000, 0b101_100_00_00000000_00000000_00000000, KalimbaOp.FMSUB, kalimba_maxim_decode_fmaddsub_a),
-    (0b111100_11_00000000_00000000_00000000, 0b110_000_00_00000000_00000000_00000000, KalimbaOp.MULX),
+    (0b111100_11_00000000_00000000_00000000, 0b110_000_00_00000000_00000000_00000000, KalimbaOp.MULX,  kalimba_maxim_decode_fmaddsub_a),
     (0b111111_11_00000000_00000000_00000000, 0b110_100_00_00000000_00000000_00000000, KalimbaOp.LOAD),
     (0b111111_11_00000000_00000000_00000000, 0b110_101_00_00000000_00000000_00000000, KalimbaOp.STORE),
     (0b111111_11_00000000_00000000_00000000, 0b110_110_00_00000000_00000000_00000000, KalimbaOp.SIGN),
@@ -516,6 +516,8 @@ if __name__ == '__main__':
     print(kalimba_maxim_lookup_op(0xb0d3504f))# 4f 50 d3 b0 | rMAC = rMAC - r1 * r2, r0 = r1 + rMACB, r3 = M[I0,M0];
     print(kalimba_maxim_lookup_op(0xb8d5906f))# 6f 90 d5 b8 | rMAC = rMAC - r3 * r4, r0 = r2 + rMACB, M[I0,M0] = rMAC;
     print(kalimba_maxim_lookup_op(0xa803504e))# 4e 50 03 a8 | if USERDEF rMACB = rMACB + r1 * r2 (SU), r3 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xc4d3504f))# 4f 50 d3 c4 | rMAC = r1 * r2, r0 = r1 - rMACB, r3 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xcc85906f))# 6f 90 85 cc | rMACB = r3 * r4, r0 = r2 - rMAC, M[I0,M0] = rMAC;
 
     print(kalimba_maxim_lookup_op(0x581200ef))#ef 00 12 58 | I1 = I2 + FP;
     print(kalimba_maxim_lookup_op(0x541e002f))#2f 00 1e 54 | I1 = FP + I2;
