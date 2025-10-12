@@ -78,7 +78,7 @@ class KalimbaWordMem:
     '''
     Accesses one word
     '''
-    reg: KalimbaBank1Reg
+    reg: KalimbaReg
     def __str__(self):
         return f'M[{self.reg}]'
 
@@ -217,7 +217,7 @@ binop_symbols = {
     KalimbaOp.FMUL: ('*', ' (frac)'),
 }
 
-type KalimbaDstOp = Union[KalimbaWordMem, KalimbaBank1Reg, KalimbaBank2Reg]
+type KalimbaDstOp = Union[KalimbaWordMem, KalimbaReg]
 type KalimbaSrcOp = Union[KalimbaWordMem, KalimbaReg, int]
 
 @dataclass(unsafe_hash=True)
@@ -249,33 +249,44 @@ def get_mask(length):
 def get_bits(instruction, offset, length):
     return (instruction >> offset) & get_mask(length)
 
-def kalimba_maxim_decode_no_regc_a(instruction: int, banka = KalimbaBank1Reg, bankb = KalimbaBank1Reg):
+def kalimba_maxim_decode_no_regs_a(instruction: int):
     cond   = KalimbaCond(get_bits(instruction, 0, 4))
-    regb   = bankb(get_bits(instruction, 4, 4))
     mag1   = KalimbaBank2Reg(KalimbaBank2Reg.M0.value + get_bits(instruction, 8, 2))
     iag1   = KalimbaBank2Reg(KalimbaBank2Reg.I0.value + get_bits(instruction, 10, 2))
     regag1 = KalimbaBank1Reg(get_bits(instruction, 12, 3))
     ag1w   = bool(get_bits(instruction, 15, 1))
-    rega   = banka(get_bits(instruction, 16, 4))
 
     mem = KalimbaIndexedMemAccess(ag1w, regag1, iag1, mag1) if regag1 != KalimbaBank1Reg.Null else None
 
-    return (cond, regb, mem, rega)
+    return (cond, mem)
 
-def kalimba_maxim_decode_a(instruction: int, banka = KalimbaBank1Reg, bankb = KalimbaBank1Reg, bankc = KalimbaBank1Reg):
-    (cond, regb, mem, rega) = kalimba_maxim_decode_no_regc_a(instruction, banka, bankb)
+def kalimba_maxim_decode_regc_a(instruction: int, bankc = KalimbaBank1Reg):
+    (cond, mem) = kalimba_maxim_decode_no_regs_a(instruction)
     regc = bankc(get_bits(instruction, 20, 4))
 
-    return (cond, regb, mem, rega, regc)
+    return (cond, mem, regc)
+
+def kalimba_maxim_decode_no_regc_a(instruction: int, banka = KalimbaBank1Reg, bankb = KalimbaBank1Reg):
+    (cond, mem) = kalimba_maxim_decode_no_regs_a(get_bits(instruction, 0, 4))
+    regb = bankb(get_bits(instruction, 4, 4))
+    rega = banka(get_bits(instruction, 16, 4))
+
+    return (cond, mem, rega, regb)
+
+def kalimba_maxim_decode_a(instruction: int, banka = KalimbaBank1Reg, bankb = KalimbaBank1Reg, bankc = KalimbaBank1Reg):
+    (cond, mem, rega, regb) = kalimba_maxim_decode_no_regc_a(instruction, banka, bankb)
+    regc = bankc(get_bits(instruction, 20, 4))
+
+    return (cond, mem, rega, regb, regc)
 
 def kalimba_maxim_decode_unop_bank1_a(instruction: int, op: KalimbaOp):
-    (cond, regb, mem, rega, regc) = kalimba_maxim_decode_a(instruction)
+    (cond, mem, rega, regb, regc) = kalimba_maxim_decode_a(instruction)
     return KalimbaUnOp(op, regc, rega, cond, mem)
 
 def kalimba_maxim_decode_binop_bank1_a(instruction, op):
-    (cond, regb, mem, rega, regc) = kalimba_maxim_decode_a(instruction)
+    (cond, mem, rega, regb, regc) = kalimba_maxim_decode_a(instruction)
 
-    # Special case: rFlags is invalid here, this is actually
+    # Special case: rFlags is invalid here, so this is actually rMAC
     if op in [KalimbaOp.LSHIFT, KalimbaOp.ASHIFT] and regc is KalimbaBank1Reg.rFlags:
         regc = KalimbaBank1Reg.rMAC
 
@@ -298,12 +309,12 @@ addressing_mode_lut = {
 }
 
 def kalimba_maxim_decode_binop_bank1_a_addsub(instruction, op):
-    (cond, regb, mem,  rega, regc) = kalimba_maxim_decode_a(instruction)
+    (cond, mem, rega, regb, regc) = kalimba_maxim_decode_a(instruction)
     (fc, fa, fb) = addressing_mode_lut[get_bits(instruction, 27, 2)]
     return KalimbaBinOp(op, fc(regc), fa(rega), fb(regb), cond, mem)
 
 def kalimba_maxim_decode_binop_bank1_a_const(const, instruction, op):
-    (cond, regb, mem, rega, regc) = kalimba_maxim_decode_a(instruction)
+    (cond, mem, rega, regb, regc) = kalimba_maxim_decode_a(instruction)
     return KalimbaBinOp(op, regc, rega, const, cond, mem)
 
 kalimba_maxim_decode_binop_bank1_a_const1 = partial(kalimba_maxim_decode_binop_bank1_a_const, 1)
@@ -326,7 +337,7 @@ assert KalimbaBank1Reg.rFlags is not KalimbaBank2Reg.L4
 
 def kalimba_maxim_decode_binop_bank12_a(instruction, op):
     (bankc, banka, bankb) = bank_select_lut[get_bits(instruction, 26, 3)]
-    (cond, regb, mem, rega, regc) = kalimba_maxim_decode_a(instruction, banka, bankb, bankc)
+    (cond, mem, rega, regb, regc) = kalimba_maxim_decode_a(instruction, banka, bankb, bankc)
 
     # Special case: rFlags is invalid here, this is actually FP
     if rega is KalimbaBank1Reg.rFlags:
@@ -361,7 +372,7 @@ fused_mul_symbols = {
 @dataclass(unsafe_hash=True)
 class KalimbaFusedMultiplyAddSub:
     '''
-    C = C OP A * B [r = D OP E]
+    C = C OP A * B [r0 = D OP E]
     '''
     op: KalimbaOp
     c: Union[Literal[KalimbaBank1Reg.rMAC], Literal[KalimbaBank1Reg.rMACB]]
@@ -369,7 +380,7 @@ class KalimbaFusedMultiplyAddSub:
     b: KalimbaBank1Reg
     cond: KalimbaCond
     sign: Optional[KalimbaSignSelect]
-    addsub: Optional[KalimbaBinOp]
+    addsub: Optional[KalimbaExtraAddSub]
     mem: Optional[KalimbaIndexedMemAccess]
 
     def __str__(self):
@@ -385,7 +396,7 @@ class KalimbaFusedMultiplyAddSub:
             return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.a} * {self.b}{sign}{addsub}{m}")'
 
 def kalimba_maxim_decode_fmaddsub_a(instruction, op):
-    (cond, regb, mem, rega) = kalimba_maxim_decode_no_regc_a(instruction)
+    (cond, mem, rega, regb) = kalimba_maxim_decode_no_regc_a(instruction)
 
     addsub = None
     sign = None
@@ -422,15 +433,15 @@ class KalimbaOffsetMemAccess:
         m = f', {self.mem}' if self.mem else ''
         cond = '' if self.cond == KalimbaCond.Always else f'if {self.cond.name} '
 
-        if self.op == KalimbaOp.LOAD:
+        if self.op in [KalimbaOp.LOAD, KalimbaOp.LOADS]:
             return f'KalimbaOffsetMemAccess("{cond}{self.c} = M[{self.a} + {self.b}]{m}")'
-        elif self.op == KalimbaOp.STORE:
+        elif self.op in [KalimbaOp.STORE,KalimbaOp.STORES]:
             return f'KalimbaOffsetMemAccess("{cond}M[{self.a} + {self.b}] = {self.c}{m}")'
         else:
             raise ValueError(f'invalid mem op: {self.op}')
 
 def kalimba_maxim_decode_load_store_a(instruction, op):
-    (cond, regb, mem, rega, regc) = kalimba_maxim_decode_a(instruction)
+    (cond, mem, rega, regb, regc) = kalimba_maxim_decode_a(instruction)
     return KalimbaOffsetMemAccess(op, regc, rega, regb, cond, mem)
 
 @dataclass(unsafe_hash=True)
@@ -446,24 +457,71 @@ class KalimbaControlFlow:
         m = f', {self.mem}' if self.mem else ''
         cond = '' if self.cond == KalimbaCond.Always else f'if {self.cond.name} '
 
-        if self.op == KalimbaOp.RTS:
-            return f'KalimbaControlFlow("{cond}rts{m}")'
-        elif self.op == KalimbaOp.RTI:
-            return f'KalimbaControlFlow("{cond}rti{m}")'
-        elif self.op == KalimbaOp.JUMP:
-            return f'KalimbaControlFlow("{cond}jump {self.a}{m}")'
-        elif self.op == KalimbaOp.CALL:
-            return f'KalimbaControlFlow("{cond}call {self.a}{m}")'
-        else:
-            raise ValueError(f'invalid control flow op: {self.op}')
+        t = f' {self.a}' if self.op in [KalimbaOp.JUMP, KalimbaOp.CALL] else ''
+        return f'KalimbaControlFlow("{cond}{self.op.name.lower()}{t}{m}")'
 
 def kalimba_maxim_decode_flow_a(instruction, op):
-    (cond, regb, mem, rega) = kalimba_maxim_decode_no_regc_a(instruction)
+    (cond, mem, rega, regb) = kalimba_maxim_decode_no_regc_a(instruction)
     if rega is KalimbaBank1Reg.rLink:
         op = KalimbaOp.RTS
     if rega is KalimbaBank1Reg.rFlags:
         op = KalimbaOp.RTI
+
     return KalimbaControlFlow(op, rega, cond, mem)
+
+@dataclass(unsafe_hash=True)
+class KalimbaExtraStackAdjust:
+    '''
+    RegC = SP/FP OP RegOff
+    '''
+    op: Union[Literal[KalimbaOp.ADD], Literal[KalimbaOp.SUB]]
+    c: KalimbaReg
+    rst: Union[Literal[KalimbaBank3Reg.SP], Literal[KalimbaBank3Reg.FP]]
+    off: KalimbaBank1Reg
+
+    def __str__(self):
+        return f'{self.c} = {self.rst} {binop_symbols[self.op]} {self.off}'
+
+@dataclass(unsafe_hash=True)
+class KalimbaStackOp:
+    '''
+    PUSH/POP
+    '''
+    op: KalimbaOp
+    reg: List[KalimbaReg]
+    cond: KalimbaCond
+    adj: Optional[KalimbaExtraStackAdjust]
+    mem: Optional[KalimbaIndexedMemAccess]
+    def __str__(self):
+        m = f', {self.mem}' if self.mem else ''
+        adj = f', {self.adj}' if self.adj else ''
+        cond = '' if self.cond == KalimbaCond.Always else f'if {self.cond.name} '
+        reg = str(self.reg[0]) if len(self.reg) == 1 else f'<{', '.join(map(str, self.reg))}>'
+        return f'KalimbaStackOp("{cond}{self.op.name.lower()} {reg}{adj}{m}")'
+
+def kalimba_maxim_decode_stack_a(instruction, op):
+    bankc = reg_bank_lut[get_bits(instruction, 16, 2) + 1]
+    (cond, mem) = kalimba_maxim_decode_no_regs_a(instruction)
+    regc = bankc(get_bits(instruction, 20, 4))
+
+    if op in [KalimbaOp.STORES, KalimbaOp.LOADS]:
+        regb = KalimbaBank1Reg(get_bits(instruction, 4, 4))
+        return KalimbaOffsetMemAccess(op, regc, KalimbaBank3Reg.FP, regb, cond, mem)
+    else:
+        return KalimbaStackOp(op, [regc], cond, None, mem)
+
+def kalimba_maxim_decode_stack_adj_a(instruction, op):
+    (cond, mem, rega, regb, regc) = kalimba_maxim_decode_a(instruction)
+
+    if (rega.value & 0b100) == 0b100:
+        rega = KalimbaBank3Reg.FP
+    else:
+        rega = KalimbaBank3Reg.SP
+
+    if regc is KalimbaBank1Reg.Null:
+        regc = rega;
+
+    return KalimbaBinOp(op, regc, rega, regb, cond, mem)
 
 type KalimbaInstruction = Union[KalimbaUnOp, KalimbaBinOp, KalimbaFusedMultiplyAddSub, KalimbaOffsetMemAccess, KalimbaControlFlow]
 
@@ -506,26 +564,26 @@ maxim_ops_lut: List[Union[Tuple[int, int, KalimbaOp, Callable[[int, KalimbaOp], 
     (0b111111_11_00000000_00000000_11110000, 0b111_001_00_00000000_00000000_11010000, KalimbaOp.SUB,   kalimba_maxim_decode_binop_bank1_a_const4), # SUB4
     (0b111111_11_00000000_00000000_11110000, 0b111_001_00_00000000_00000000_11100000, KalimbaOp.SE8,   kalimba_maxim_decode_unop_bank1_a),
     (0b111111_11_00000000_00000000_11110000, 0b111_001_00_00000000_00000000_11110000, KalimbaOp.SE16,  kalimba_maxim_decode_unop_bank1_a),
-
     #(0b111111_11_00000000_00000000_00000000, 0b111_010_00_00000000_00000000_00000000, KalimbaOp.UNUSED),
     #(0b111111_11_00000000_00000000_00000000, 0b111_011_00_00000000_00000000_00000000, KalimbaOp.UNUSED),
-
-    # TODO: push/pop
-    #(0b111111_11_00000000_00000000_00000000, 0b111_100_00_00000000_00000000_00000000, KalimbaOp.),
-
-    # TODO: subword
-    #(0b111111_11_00000000_00000000_00000000, 0b111_101_00_00000000_00000000_00000000, KalimbaOp.),
-
+    # Order matters here!
+    (0b111111_11_00001111_00000000_00000000, 0b111_100_00_00000011_00000000_00000000, KalimbaOp.ADD, kalimba_maxim_decode_stack_adj_a),
+    (0b111111_11_00001111_00000000_00000000, 0b111_100_00_00000111_00000000_00000000, KalimbaOp.ADD, kalimba_maxim_decode_stack_adj_a),
+    (0b111111_11_00001100_00000000_00000000, 0b111_100_00_00000000_00000000_00000000, KalimbaOp.PUSH,   kalimba_maxim_decode_stack_a),
+    (0b111111_11_00001100_00000000_00000000, 0b111_100_00_00000100_00000000_00000000, KalimbaOp.POP,    kalimba_maxim_decode_stack_a),
+    (0b111111_11_00001100_00000000_00000000, 0b111_100_00_00001000_00000000_00000000, KalimbaOp.STORES, kalimba_maxim_decode_stack_a),
+    (0b111111_11_00001100_00000000_00000000, 0b111_100_00_00001100_00000000_00000000, KalimbaOp.LOADS,  kalimba_maxim_decode_stack_a),
     #(0b111111_11_00000000_00000000_00000000, 0b111_110_00_00000000_00000000_00000000, KalimbaOp.UNUSED),
 
     # Type B
     #(0b111111_11_00000000_00000000_00000000, 0b _ _01_00000000_00000000_00000000, KalimbaOp.),
     # Type C
     #(),
+
     # Subword A
-    (0b11111111_00000000_00000000_00000000, 0b11110100_00000000_00000000_00000000, KalimbaOp.LOADW),
+    (0b11111111_00000000_00000000_00000000, 0b11110100_00000000_00000000_00000000, KalimbaOp.UNUSED),
     # Subword B
-    (0b11111111_00000000_00000000_00000000, 0b11110101_00000000_00000000_00000000, KalimbaOp.LOADW),
+    (0b11111111_00000000_00000000_00000000, 0b11110101_00000000_00000000_00000000, KalimbaOp.UNUSED),
     # Prefix
     (0b11111111_11100000_00000000_00000000, 0b11111101_00000000_00000000_00000000, KalimbaOp.PREFIX),
 ]
@@ -596,6 +654,18 @@ if __name__ == '__main__':
     print(kalimba_maxim_lookup_op(0xe00ca800))# 00 a8 0c e0 | if EQ call r10, M[I2,M0] = r0;
     print(kalimba_maxim_lookup_op(0xdc0eaf01))# 01 af 0e dc | if NE rti, M[I3,M3] = r0;
     print(kalimba_maxim_lookup_op(0xdc0daf01))# 01 af 0d dc | if NE rts, M[I3,M3] = r0;
+
+    print(kalimba_maxim_lookup_op(0xf0904006))# 06 40 90 f0 | if V push r7, r2 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xf0d04006))# 06 40 d0 f0 | if V push rLink, r2 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xf0814006))# 06 40 81 f0 | if V push M0, r2 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xf0a24006))# 06 40 a2 f0 | if V push B0, r2 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xf0624006))# 06 40 62 f0 | if V push DivRemainder, r2 = M[I0,M0];
+
+    print(kalimba_maxim_lookup_op(0xf0934025))# 25 40 93 f0 | if POS r7 = SP + r0, r2 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xf0034025))# 25 40 03 f0 | if POS SP = SP + r0, r2 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xf0974025))# 25 40 97 f0 | if POS r7 = FP + r0, r2 = M[I0,M0];
+    print(kalimba_maxim_lookup_op(0xf0074025))# 25 40 07 f0 | if POS FP = FP + r0, r2 = M[I0,M0];
+
 
     #print(kalimba_maxim_lookup_op(0x01b00004))# Type B
     #print(kalimba_maxim_lookup_op(0xdde0fffe))# fe ff e0 dd | if USERDEF jump BRANCH1;
