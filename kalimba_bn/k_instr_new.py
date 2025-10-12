@@ -1,5 +1,5 @@
 from enum import IntEnum, auto
-from typing import Callable, List, Type, Optional, Dict, Tuple, NewType, Union
+from typing import Callable, List, Type, Optional, Dict, Tuple, NewType, Union, Literal
 from dataclasses import dataclass
 from functools import partial
 
@@ -218,7 +218,7 @@ binop_symbols = {
 }
 
 type KalimbaDstOp = Union[KalimbaWordMem, KalimbaBank1Reg, KalimbaBank2Reg]
-type KalimbaSrcOp = Union[KalimbaWordMem, KalimbaBankReg, int]
+type KalimbaSrcOp = Union[KalimbaWordMem, KalimbaReg, int]
 
 @dataclass(unsafe_hash=True)
 class KalimbaBinOp:
@@ -345,7 +345,7 @@ class KalimbaSignSelect(IntEnum):
 
 @dataclass(unsafe_hash=True)
 class KalimbaExtraAddSub:
-    op: Union[KalimbaOp.ADD, KalimbaOp.SUB]
+    op: Union[Literal[KalimbaOp.ADD], Literal[KalimbaOp.SUB]]
     a: KalimbaBank1Reg
     b: KalimbaBank1Reg
 
@@ -364,7 +364,7 @@ class KalimbaFusedMultiplyAddSub:
     C = C OP A * B [r = D OP E]
     '''
     op: KalimbaOp
-    c: Union[KalimbaBank1Reg.rMAC, KalimbaBank1Reg.rMACB]
+    c: Union[Literal[KalimbaBank1Reg.rMAC], Literal[KalimbaBank1Reg.rMACB]]
     a: KalimbaBank1Reg
     b: KalimbaBank1Reg
     cond: KalimbaCond
@@ -433,8 +433,42 @@ def kalimba_maxim_decode_load_store_a(instruction, op):
     (cond, regb, mem, rega, regc) = kalimba_maxim_decode_a(instruction)
     return KalimbaOffsetMemAccess(op, regc, rega, regb, cond, mem)
 
+@dataclass(unsafe_hash=True)
+class KalimbaControlFlow:
+    '''
+    JUMP/CALL
+    '''
+    op: KalimbaOp
+    a: KalimbaBank1Reg
+    cond: KalimbaCond
+    mem: Optional[KalimbaIndexedMemAccess]
+    def __str__(self):
+        m = f', {self.mem}' if self.mem else ''
+        cond = '' if self.cond == KalimbaCond.Always else f'if {self.cond.name} '
+
+        if self.op == KalimbaOp.RTS:
+            return f'KalimbaControlFlow("{cond}rts{m}")'
+        elif self.op == KalimbaOp.RTI:
+            return f'KalimbaControlFlow("{cond}rti{m}")'
+        elif self.op == KalimbaOp.JUMP:
+            return f'KalimbaControlFlow("{cond}jump {self.a}{m}")'
+        elif self.op == KalimbaOp.CALL:
+            return f'KalimbaControlFlow("{cond}call {self.a}{m}")'
+        else:
+            raise ValueError(f'invalid control flow op: {self.op}')
+
+def kalimba_maxim_decode_flow_a(instruction, op):
+    (cond, regb, mem, rega) = kalimba_maxim_decode_no_regc_a(instruction)
+    if rega is KalimbaBank1Reg.rLink:
+        op = KalimbaOp.RTS
+    if rega is KalimbaBank1Reg.rFlags:
+        op = KalimbaOp.RTI
+    return KalimbaControlFlow(op, rega, cond, mem)
+
+type KalimbaInstruction = Union[KalimbaUnOp, KalimbaBinOp, KalimbaFusedMultiplyAddSub, KalimbaOffsetMemAccess, KalimbaControlFlow]
+
 # mask, value, operation, decode
-maxim_ops_lut = [
+maxim_ops_lut: List[Union[Tuple[int, int, KalimbaOp, Callable[[int, KalimbaOp], KalimbaInstruction]], Tuple[int, int, KalimbaOp]]] = [
     # Type A
     (0b111001_11_00000000_00000000_00000000, 0b000_000_00_00000000_00000000_00000000, KalimbaOp.ADD, kalimba_maxim_decode_binop_bank1_a_addsub),
     (0b111001_11_00000000_00000000_00000000, 0b000_001_00_00000000_00000000_00000000, KalimbaOp.ADC, kalimba_maxim_decode_binop_bank1_a_addsub),
@@ -456,8 +490,8 @@ maxim_ops_lut = [
     (0b111111_11_00000000_00000000_00000000, 0b110_100_00_00000000_00000000_00000000, KalimbaOp.LOAD,  kalimba_maxim_decode_load_store_a),
     (0b111111_11_00000000_00000000_00000000, 0b110_101_00_00000000_00000000_00000000, KalimbaOp.STORE, kalimba_maxim_decode_load_store_a),
     (0b111111_11_00000000_00000000_00000000, 0b110_110_00_00000000_00000000_00000000, KalimbaOp.SIGN, kalimba_maxim_decode_unop_bank1_a),
-    (0b111111_11_00000000_00000000_00000000, 0b110_111_00_00000000_00000000_00000000, KalimbaOp.JUMP), # Special cases: RTS/RTI
-    (0b111111_11_00000000_00000000_00000000, 0b111_000_00_00000000_00000000_00000000, KalimbaOp.CALL),
+    (0b111111_11_00000000_00000000_00000000, 0b110_111_00_00000000_00000000_00000000, KalimbaOp.JUMP, kalimba_maxim_decode_flow_a), # Special cases: RTS/RTI
+    (0b111111_11_00000000_00000000_00000000, 0b111_000_00_00000000_00000000_00000000, KalimbaOp.CALL, kalimba_maxim_decode_flow_a),
     (0b111111_11_00000000_00000000_11110000, 0b111_001_00_00000000_00000000_00100000, KalimbaOp.ADD,   kalimba_maxim_decode_binop_bank1_a_const1), # ADD1
     (0b111111_11_00000000_00000000_11110000, 0b111_001_00_00000000_00000000_00110000, KalimbaOp.SUB,   kalimba_maxim_decode_binop_bank1_a_const1), # SUB1
     (0b111111_11_00000000_00000000_11110000, 0b111_001_00_00000000_00000000_01000000, KalimbaOp.ABS,   kalimba_maxim_decode_unop_bank1_a),
@@ -496,9 +530,7 @@ maxim_ops_lut = [
     (0b11111111_11100000_00000000_00000000, 0b11111101_00000000_00000000_00000000, KalimbaOp.PREFIX),
 ]
 
-type KalimbaInstruction = Union[KalimbaUnOp, KalimbaBinOp, KalimbaFusedMultiplyAddSub, KalimbaOffsetMemAccess]
-
-def kalimba_maxim_lookup_op(instruction: int) -> KalimbaInstruction:
+def kalimba_maxim_lookup_op(instruction: int) -> Union[KalimbaInstruction, str]:
     for (mask, value, opcode, *other) in maxim_ops_lut:
         if (instruction & mask) == value:
             return opcode.name if not other else other[0](instruction, opcode)
@@ -512,33 +544,24 @@ if __name__ == '__main__':
     print(kalimba_maxim_lookup_op(0x2034005f))# 5f 00 34 20 | r1 = r2 - r3;
     print(kalimba_maxim_lookup_op(0x2035004f))# 4f 00 35 20 | r1 = r3 - r2;
     print(kalimba_maxim_lookup_op(0x2435004f))# 4f 00 35 24 | r1 = r3 - r2 - Borrow;
-
     print(kalimba_maxim_lookup_op(0x1834005f))# 5f 00 34 18 | M[r1] = r2 + r3;
     print(kalimba_maxim_lookup_op(0x18340056))# 56 00 34 18 | if V M[r1] = r2 + r3;
-
     print(kalimba_maxim_lookup_op(0x18342456))# 56 24 34 18 | if V M[r1] = r2 + r3, r0 = M[I1,M0];
-
     print(kalimba_maxim_lookup_op(0xe434454f))# 4f 45 34 e4 | r1 = ABS r2, r2 = M[I1,M1];
     print(kalimba_maxim_lookup_op(0xe434ba4f))# 4f ba 34 e4 | r1 = ABS r2, M[I2,M2] = r1;
-
     print(kalimba_maxim_lookup_op(0x8834005f))# 5f 00 34 88 | r1 = r2 XOR r3;
-
     print(kalimba_maxim_lookup_op(0x8cea00b1))# b1 00 ea 8c | if Z rMAC = r8 LSHIFT r9;
     print(kalimba_maxim_lookup_op(0x90e70090))# 90 00 e7 90 | if EQ rMAC = r5 ASHIFT r7;
-
     print(kalimba_maxim_lookup_op(0x88170090))# 90 00 17 88 | if EQ rMAC = r5 XOR r7;
     print(kalimba_maxim_lookup_op(0x00170090))# 90 00 17 00 | if EQ rMAC = r5 + r7;
     print(kalimba_maxim_lookup_op(0x88e70090))# 90 00 e7 88 | if EQ rFlags = r5 XOR r7;
-
     print(kalimba_maxim_lookup_op(0x9434005f))# 5f 00 34 94 | r1 = r2 * r3 (frac);
     print(kalimba_maxim_lookup_op(0x9834005f))# 5f 00 34 98 | r1 = r2 * r3 (int);
     print(kalimba_maxim_lookup_op(0x9c34005f))# 5f 00 34 9c | r1 = r2 * r3 (int) (sat);
     print(kalimba_maxim_lookup_op(0x9cf4005f))# 5f 00 f4 9c | rMACB = r2 * r3 (int) (sat);
-
     print(kalimba_maxim_lookup_op(0xac23504f))# 4f 50 23 ac | r0 = r0 + r1 * r2 (SS), r3 = M[I0,M0];
     print(kalimba_maxim_lookup_op(0xa4c3504f))# 4f 50 c3 a4 | rMACB = rMACB + r1 * r2, r0 = r1 - rMACB, r3 = M[I0,M0];
     print(kalimba_maxim_lookup_op(0xacc5906f))# 6f 90 c5 ac | rMACB = rMACB + r3 * r4, r0 = r2 - rMACB, M[I0,M0] = rMAC;
-
     print(kalimba_maxim_lookup_op(0xa483504f))# 4f 50 83 a4 | rMACB = rMACB + r1 * r2, r0 = r1 - rMAC, r3 = M[I0,M0];
     print(kalimba_maxim_lookup_op(0xac85906f))# 6f 90 85 ac | rMACB = rMACB + r3 * r4, r0 = r2 - rMAC, M[I0,M0] = rMAC;
     print(kalimba_maxim_lookup_op(0xb0d3504f))# 4f 50 d3 b0 | rMAC = rMAC - r1 * r2, r0 = r1 + rMACB, r3 = M[I0,M0];
@@ -546,15 +569,11 @@ if __name__ == '__main__':
     print(kalimba_maxim_lookup_op(0xa803504e))# 4e 50 03 a8 | if USERDEF rMACB = rMACB + r1 * r2 (SU), r3 = M[I0,M0];
     print(kalimba_maxim_lookup_op(0xc4d3504f))# 4f 50 d3 c4 | rMAC = r1 * r2, r0 = r1 - rMACB, r3 = M[I0,M0];
     print(kalimba_maxim_lookup_op(0xcc85906f))# 6f 90 85 cc | rMACB = r3 * r4, r0 = r2 - rMAC, M[I0,M0] = rMAC;
-
     print(kalimba_maxim_lookup_op(0x581200ef))#ef 00 12 58 | I1 = I2 + FP;
     print(kalimba_maxim_lookup_op(0x541e002f))#2f 00 1e 54 | I1 = FP + I2;
     print(kalimba_maxim_lookup_op(0x4ce1002f))#2f 00 e1 4c | rFlags = I1 + I2;
-
     print(kalimba_maxim_lookup_op(0xd02140fe))# fe 40 21 d0 | if USERDEF r0 = M[rMAC + rMACB], r2 = M[I0,M0];
     print(kalimba_maxim_lookup_op(0xd441a1fe))# fe a1 41 d4 | if USERDEF M[rMAC + rMACB] = r2, M[I0,M1] = r0;
-
-    print(kalimba_maxim_lookup_op(0xdc0d000f))# 0f 00 0d dc | rts; // special case of jump
     print(kalimba_maxim_lookup_op(0xe434002f))# 2f 00 34 e4 | r1 = r2 + 1;
     print(kalimba_maxim_lookup_op(0xe434003f))# 3f 00 34 e4 | r1 = r2 - 1;
     print(kalimba_maxim_lookup_op(0xe434004f))# 4f 00 34 e4 | r1 = ABS r2;
@@ -570,8 +589,17 @@ if __name__ == '__main__':
     print(kalimba_maxim_lookup_op(0xe43400ff))# ff 00 34 e4 | r1 = SE16 r2;
     print(kalimba_maxim_lookup_op(0xd823000f))# 0f 00 23 d8 | r0 = SIGNDET r1;
 
+    print(kalimba_maxim_lookup_op(0xdc0d000f))# 0f 00 0d dc | rts; // special case of jump
+    print(kalimba_maxim_lookup_op(0xdc0e000f))# 0f 00 0e dc | rti; // special case of jump
+    print(kalimba_maxim_lookup_op(0xdc09000e))# 0e 00 09 dc | if USERDEF jump r7;
+    print(kalimba_maxim_lookup_op(0xe00c0000))# 00 00 0c e0 | if EQ call r10;
+    print(kalimba_maxim_lookup_op(0xe00ca800))# 00 a8 0c e0 | if EQ call r10, M[I2,M0] = r0;
+    print(kalimba_maxim_lookup_op(0xdc0eaf01))# 01 af 0e dc | if NE rti, M[I3,M3] = r0;
+    print(kalimba_maxim_lookup_op(0xdc0daf01))# 01 af 0d dc | if NE rts, M[I3,M3] = r0;
+
+    #print(kalimba_maxim_lookup_op(0x01b00004))# Type B
+    #print(kalimba_maxim_lookup_op(0xdde0fffe))# fe ff e0 dd | if USERDEF jump BRANCH1;
+    #print(kalimba_maxim_lookup_op(0xe1000004))# 04 00 00 e1 | if EQ call BRANCH2;
     #print(kalimba_maxim_lookup_op(0x03000000))# Type C
     #print(kalimba_maxim_lookup_op(0x23000000))
-    #print(kalimba_maxim_lookup_op(0x01b00004))# Type B
-    #print(kalimba_maxim_lookup_op(0xe434000f))# 0f 00 34 e4 | kalcode(e434000f);
-    #print(kalimba_maxim_lookup_op(0xe434001f))# 1f 00 34 e4 | kalcode(e434001f);
+
