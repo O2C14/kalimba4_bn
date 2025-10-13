@@ -244,8 +244,9 @@ class KalimbaBinOp:
     c: KalimbaDstOp
     a: KalimbaSrcOp
     b: KalimbaSrcOp
-    cond: KalimbaCond
-    mem: Optional[KalimbaIndexedMemAccess]
+    cond: KalimbaCond = KalimbaCond.Always
+    mem1: Optional[KalimbaIndexedMemAccess] = None
+    mem2: Optional[KalimbaIndexedMemAccess] = None
     shift: Optional[KalimbaShiftType] = None
 
     def __str__(self):
@@ -256,10 +257,11 @@ class KalimbaBinOp:
         elif self.op in [KalimbaOp.ASHIFT, KalimbaOp.LSHIFT] and self.shift:
             extra = f' {shift_type_lut[self.shift]}'
 
-        m = f', {self.mem}' if self.mem else ''
+        m1 = f', {self.mem1}' if self.mem1 else ''
+        m2 = f', {self.mem2}' if self.mem2 else ''
         cond = '' if self.cond == KalimbaCond.Always else f'if {self.cond.name} '
 
-        return f'KalimbaBinOp("{cond}{self.c} = {self.a} {op} {self.b}{extra}{m}")'
+        return f'KalimbaBinOp("{cond}{self.c} = {self.a} {op} {self.b}{extra}{m1}{m2}")'
 
 def get_mask(length):
     return (1 << length) - 1
@@ -319,7 +321,7 @@ def kalimba_maxim_decode_binop_bank1_a(instruction, op):
         elif regc in [KalimbaBank1Reg.rMAC, KalimbaBank1Reg.rMACB]:
             shift = KalimbaShiftType.ST_72
 
-    return KalimbaBinOp(op, regc, rega, regb, cond, mem, shift)
+    return KalimbaBinOp(op, regc, rega, regb, cond, mem, None, shift)
 
 def kalimba_maxim_decode_b(instruction: int, banka = KalimbaBank1Reg, bankc = KalimbaBank1Reg):
     k16 = get_bits_signed(instruction, 0, 16)
@@ -330,7 +332,7 @@ def kalimba_maxim_decode_b(instruction: int, banka = KalimbaBank1Reg, bankc = Ka
 
 def kalimba_maxim_decode_binop_bank1_b(instruction, op):
     (k16, rega, regc) = kalimba_maxim_decode_b(instruction)
-    return KalimbaBinOp(op, regc, rega, k16, KalimbaCond.Always, None)
+    return KalimbaBinOp(op, regc, rega, k16)
 
 
 def kalimba_maxim_decode_shift_common_bank1_b(instruction):
@@ -377,11 +379,84 @@ def kalimba_maxim_decode_shift_common_bank1_b(instruction):
 
 def kalimba_maxim_decode_shift_by_c_bank1_b(instruction, op):
     (regc, rega, amount, shift) =  kalimba_maxim_decode_shift_common_bank1_b(instruction)
-    return KalimbaBinOp(op, regc, rega, amount, KalimbaCond.Always, None, shift)
+    return KalimbaBinOp(op, regc, rega, amount, KalimbaCond.Always, None, None, shift)
 
 def kalimba_maxim_decode_shift_c_bank1_b(instruction, op):
     (regc, rega, amount, shift) =  kalimba_maxim_decode_shift_common_bank1_b(instruction)
-    return KalimbaBinOp(op, regc, amount, rega, KalimbaCond.Always, None, shift)
+    return KalimbaBinOp(op, regc, amount, rega, KalimbaCond.Always, None, None, shift)
+
+def kalimba_maxim_decode_mem1_common_c(instruction):
+    mag1_k = get_bits(instruction, 8, 2)
+    iag1   = KalimbaBank2Reg(KalimbaBank2Reg.I0.value + get_bits(instruction, 10, 2))
+    regag1 = KalimbaBank1Reg(get_bits(instruction, 12, 3))
+    ag1w   = bool(get_bits(instruction, 15, 1))
+    return (mag1_k, iag1, regag1, ag1w)
+
+def kalimba_maxim_decode_mem2_common_c(instruction):
+    mag2_k = get_bits(instruction, 0, 2)
+    iag2   = KalimbaBank2Reg(KalimbaBank2Reg.I4.value + get_bits(instruction, 2, 2))
+    regag2 = KalimbaBank1Reg(get_bits(instruction, 4, 3))
+    ag2w   = bool(get_bits(instruction, 7, 1))
+    return (mag2_k, iag2, regag2, ag2w)
+
+def kalimba_maxim_decode_mem1_reg_c(instruction):
+    (mag1_k, iag1, regag1, ag1w) = kalimba_maxim_decode_mem1_common_c(instruction)
+    if regag1 == KalimbaBank1Reg.Null:
+        return None
+    else:
+        mag1 = KalimbaBank2Reg(KalimbaBank2Reg.M0.value + mag1_k)
+        return KalimbaIndexedMemAccess(ag1w, regag1, iag1, mag1)
+
+def kalimba_maxim_decode_mem2_reg_c(instruction):
+    (mag2_k, iag2, regag2, ag1w) = kalimba_maxim_decode_mem2_common_c(instruction)
+    if regag2 == KalimbaBank1Reg.Null:
+        return None
+    else:
+        mag2 = KalimbaBank2Reg(KalimbaBank2Reg.M0.value + mag2_k)
+        return KalimbaIndexedMemAccess(ag1w, regag1, iag1, mag1)
+
+def kalimba_maxim_decode_creg_c(instruction, banka = KalimbaBank1Reg):
+    mem1 = kalimba_maxim_decode_mem1_reg_c(instruction)
+    mem2 = kalimba_maxim_decode_mem2_reg_c(instruction)
+    rega = banka(get_bits(instruction, 16, 4))
+    regc = KalimbaBank1Reg(get_bits(instruction, 20, 4))
+    return (mem1, mem2, rega, regc)
+
+mag12_const_lut = {
+    0b00: -4,
+    0b01: 0,
+    0b10: 4,
+    0b11: 8,
+}
+
+def kalimba_maxim_decode_mem1_const_creg(instruction):
+    (mag1_k, iag1, regag1, ag1w) = kalimba_maxim_decode_mem1_common_c(instruction)
+    if regag1 == KalimbaBank1Reg.Null:
+        return None
+    else:
+        mkag1 = mag12_const_lut[mag1_k]
+        return KalimbaIndexedMemAccess(ag1w, regag1, iag1, mkag1)
+
+def kalimba_maxim_decode_mem2_const_creg(instruction):
+    (mag2_k, iag2, regag2, ag2w) = kalimba_maxim_decode_mem2_common_c(instruction)
+    if regag2 == KalimbaBank1Reg.Null:
+        return None
+    else:
+        mkag2 = mag12_const_lut[mag2_k]
+        return KalimbaIndexedMemAccess(ag2w, regag2, iag2, mkag2)
+
+def kalimba_maxim_decode_const_c(instruction):
+    mem1 = kalimba_maxim_decode_mem1_const_c(instruction)
+    mem2 = kalimba_maxim_decode_mem2_const_c(instruction)
+    rega = KalimbaBank1Reg(get_bits(instruction, 16, 4))
+    regc = KalimbaBank1Reg(get_bits(instruction, 20, 4))
+    return (mem1, mem2, rega, regc)
+
+def kalimba_maxim_decode_rega_c(instruction):
+    mem1 = kalimba_maxim_decode_mem1_reg_c(instruction)
+    mem2 = kalimba_maxim_decode_mem2_reg_c(instruction)
+    rega = KalimbaBank1Reg(get_bits(instruction, 16, 4))
+    return (mem1, mem2, rega)
 
 class KalimbaAddressingMode(IntEnum):
     RRR = 0b00 # reg = reg OP reg/imm
@@ -409,9 +484,19 @@ def kalimba_maxim_decode_binop_bank1_b_addsub(instruction, op):
     addr_mode = get_bits(instruction, 27, 2)
     (fc, fa, fb) = addressing_mode_lut[addr_mode]
     if addr_mode == 0b11:
-        return KalimbaBinOp(op, fc(k16), fa(regc), fb(rega), KalimbaCond.Always, None)
+        return KalimbaBinOp(op, fc(k16), fa(regc), fb(rega))
     else:
-        return KalimbaBinOp(op, fc(regc), fa(rega), fb(k16), KalimbaCond.Always, None)
+        return KalimbaBinOp(op, fc(regc), fa(rega), fb(k16))
+
+def kalimba_maxim_decode_binop_bank1_creg_addsub(instruction, op):
+    (mem1, mem2, rega, regc) = kalimba_maxim_decode_creg_c(instruction)
+    (_, _, fa) = addressing_mode_lut[get_bits(instruction, 27, 2)]
+    return KalimbaBinOp(op, regc, regc, fa(rega), KalimbaCond.Always, mem1, mem2)
+
+def kalimba_maxim_decode_binop_bank1_const_addsub(instruction, op):
+    (mem1, mem2, rega, regc) = kalimba_maxim_decode_const_c(instruction)
+    (_, _, fa) = addressing_mode_lut[get_bits(instruction, 27, 2)]
+    return KalimbaBinOp(op, regc, regc, fa(rega), KalimbaCond.Always, mem1, mem2)
 
 def kalimba_maxim_decode_binop_bank1_a_const(const, instruction, op):
     (cond, mem, rega, regb, regc) = kalimba_maxim_decode_a(instruction)
@@ -463,9 +548,34 @@ def kalimba_maxim_decode_binop_bank12_b(instruction, op):
         rega = KalimbaBank3Reg.FP
 
     if get_bits(instruction, 26, 1) == 0:
-        return KalimbaBinOp(op, regc, rega, k16, KalimbaCond.Always, None)
+        return KalimbaBinOp(op, regc, rega, k16)
     else:
-        return KalimbaBinOp(op, regc, k16, rega, KalimbaCond.Always, None)
+        return KalimbaBinOp(op, regc, k16, rega)
+
+bank_select_c_lut = {
+    0b00: KalimbaBank1Reg,
+    0b01: KalimbaBank2Reg,
+}
+
+def kalimba_maxim_decode_binop_bank12_creg(instruction, op):
+    banka = bank_select_c_lut[get_bits(instruction, 27, 2)]
+    (mem1, mem2, rega, regc) = kalimba_maxim_decode_creg_c(instruction, banka)
+
+    # Special case: rFlags is invalid here, this is actually FP
+    if rega == KalimbaBank1Reg.rFlags:
+        rega = KalimbaBank3Reg.FP
+
+    return KalimbaBinOp(op, regc, regc, rega)
+
+def kalimba_maxim_decode_binop_bank12_const(instruction, op):
+    banka = bank_select_c_lut[get_bits(instruction, 27, 2)]
+    (mem1, mem2, rega, regc) = kalimba_maxim_decode_const_c(instruction, banka)
+
+    # Special case: rFlags is invalid here, this is actually FP
+    if rega == KalimbaBank1Reg.rFlags:
+        rega = KalimbaBank3Reg.FP
+
+    return KalimbaBinOp(op, regc, regc, rega)
 
 def kalimba_maxim_decode_divide_b(instruction, op):
     (_, rega, regc) = kalimba_maxim_decode_b(instruction)
@@ -475,11 +585,11 @@ def kalimba_maxim_decode_divide_b(instruction, op):
     assert div != 0b11
 
     if div == 0b00:
-        return KalimbaBinOp(op, KalimbaBank3.DivResult, regc, rega, KalimbaCond.Always, None)
+        return KalimbaBinOp(op, KalimbaBank3.DivResult, regc, rega)
     elif div == 0b01:
-        return KalimbaUnOp(op, regc, KalimbaBank3.DivResult, KalimbaCond.Always, None)
+        return KalimbaUnOp(op, regc, KalimbaBank3.DivResult)
     elif div == 0b10:
-        return KalimbaUnOp(op, regc, KalimbaBank3.DivResult, KalimbaCond.Always, None)
+        return KalimbaUnOp(op, regc, KalimbaBank3.DivResult)
 
 
 class KalimbaSignSelect(IntEnum):
@@ -910,8 +1020,18 @@ maxim_ops_lut: List[Union[Tuple[int, int, KalimbaOp, Callable[[int, KalimbaOp], 
     (0b111111_11_00001100_00000000_00000000, 0b111_100_01_00001100_00000000_00000000, KalimbaOp.LOADS,  kalimba_maxim_decode_stack_b),
 
     # Type C
-    #(),
-
+    (0b111001_11_00000000_00000000_00000000, 0b000_000_10_00000000_00000000_00000000, KalimbaOp.ADD, kalimba_maxim_decode_binop_bank1_creg_addsub),
+    (0b111001_11_00000000_00000000_00000000, 0b000_001_10_00000000_00000000_00000000, KalimbaOp.ADC, kalimba_maxim_decode_binop_bank1_creg_addsub),
+    (0b111001_11_00000000_00000000_00000000, 0b001_000_10_00000000_00000000_00000000, KalimbaOp.SUB, kalimba_maxim_decode_binop_bank1_creg_addsub),
+    (0b111001_11_00000000_00000000_00000000, 0b001_001_10_00000000_00000000_00000000, KalimbaOp.SBB, kalimba_maxim_decode_binop_bank1_creg_addsub),
+    (0b111001_11_00000000_00000000_00000000, 0b000_000_11_00000000_00000000_00000000, KalimbaOp.ADD, kalimba_maxim_decode_binop_bank1_const_addsub),
+    (0b111001_11_00000000_00000000_00000000, 0b000_001_11_00000000_00000000_00000000, KalimbaOp.ADC, kalimba_maxim_decode_binop_bank1_const_addsub),
+    (0b111001_11_00000000_00000000_00000000, 0b001_000_11_00000000_00000000_00000000, KalimbaOp.SUB, kalimba_maxim_decode_binop_bank1_const_addsub),
+    (0b111001_11_00000000_00000000_00000000, 0b001_001_11_00000000_00000000_00000000, KalimbaOp.SBB, kalimba_maxim_decode_binop_bank1_const_addsub),
+    (0b111000_11_00000000_00000000_00000000, 0b010_000_10_00000000_00000000_00000000, KalimbaOp.ADD, kalimba_maxim_decode_binop_bank12_creg), #ADDB12
+    (0b111000_11_00000000_00000000_00000000, 0b011_000_10_00000000_00000000_00000000, KalimbaOp.SUB, kalimba_maxim_decode_binop_bank12_creg), #SUBB12
+    (0b111000_11_00000000_00000000_00000000, 0b010_000_11_00000000_00000000_00000000, KalimbaOp.ADD, kalimba_maxim_decode_binop_bank12_const), #ADDB12
+    (0b111000_11_00000000_00000000_00000000, 0b011_000_11_00000000_00000000_00000000, KalimbaOp.SUB, kalimba_maxim_decode_binop_bank12_const), #SUBB12
     # Subword A
     (0b11111111_00000000_00000000_00000000, 0b11110100_00000000_00000000_00000000, KalimbaOp.LOADW, kalimba_maxim_decode_subword_a),
     # Subword B
