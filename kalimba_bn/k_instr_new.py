@@ -1,9 +1,9 @@
-from enum import IntEnum, auto
+from enum import Enum, IntEnum, auto
 from typing import Callable, List, Type, Optional, Dict, Tuple, NewType, Union, Literal
 from dataclasses import dataclass
 from functools import partial
 
-class KalimbaRegBase(IntEnum):
+class KalimbaRegBase(Enum):
     def __str__(self):
         return self.name
 
@@ -313,10 +313,10 @@ def kalimba_maxim_decode_binop_bank1_a(instruction, op):
 
     # Special case: rFlags is invalid here, so this is actually rMAC with 32-bit width
     if op in [KalimbaOp.LSHIFT, KalimbaOp.ASHIFT]:
-        if regc is KalimbaBank1Reg.rFlags:
+        if regc == KalimbaBank1Reg.rFlags:
             regc = KalimbaBank1Reg.rMAC
             shift = KalimbaShiftType.ST_32
-        elif regc is KalimbaBank1Reg.rMAC or regc is KalimbaBank1Reg.rMACB:
+        elif regc in [KalimbaBank1Reg.rMAC, KalimbaBank1Reg.rMACB]:
             shift = KalimbaShiftType.ST_72
 
     return KalimbaBinOp(op, regc, rega, regb, cond, mem, shift)
@@ -341,35 +341,35 @@ def kalimba_maxim_decode_shift_common_bank1_b(instruction):
     shift = None
 
     # TODO: return as kalcode, i.e. kalcode(912b0207);
-    assert regc is KalimbaBank1Reg.rMAC or regc is KalimbaBank1Reg.rMACB or dest == 0b000
+    assert regc in [KalimbaBank1Reg.rMAC, KalimbaBank1Reg.rMACB] or dest == 0b000
 
     if dest == 0b001:
         shift = KalimbaShiftType.ST_LO
-    elif dest == 0b000 and regc is KalimbaBank1Reg.rFlags:
+    elif dest == 0b000 and regc == KalimbaBank1Reg.rFlags:
         regc = KalimbaBank1Reg.rMAC
         shift = KalimbaShiftType.ST_MI
-    elif dest == 0b000 and (regc is KalimbaBank1Reg.rMAC or regc is KalimbaBank1Reg.rMACB):
+    elif dest == 0b000 and regc in [KalimbaBank1Reg.rMAC, KalimbaBank1Reg.rMACB]:
         shift = KalimbaShiftType.ST_72
     elif dest == 0b010:
         shift = KalimbaShiftType.ST_HI
     elif dest == 0b101:
-        if regc is KalimbaBank1Reg.rMAC:
+        if regc == KalimbaBank1Reg.rMAC:
             regc = KalimbaBank3Reg.rMAC0
-        elif regc is KalimbaBank1Reg.rMACB:
+        elif regc == KalimbaBank1Reg.rMACB:
             regc = KalimbaBank3Reg.rMACB0
         shift = KalimbaShiftType.ST_32
     elif dest == 0b100:
-        if regc is KalimbaBank1Reg.rMAC:
+        if regc == KalimbaBank1Reg.rMAC:
             #regc = KalimbaBank3Reg.rMAC12 // TODO: differentiate between rMAC(B)12 and rMAC(B)1 in __str__
             regc = KalimbaBank3Reg.rMAC1
-        elif regc is KalimbaBank1Reg.rMACB:
+        elif regc == KalimbaBank1Reg.rMACB:
             #regc = KalimbaBank3Reg.rMACB12
             regc = KalimbaBank3Reg.rMACB1
         shift = KalimbaShiftType.ST_32
     elif dest == 0b110:
-        if regc is KalimbaBank1Reg.rMAC:
+        if regc == KalimbaBank1Reg.rMAC:
             regc = KalimbaBank3Reg.rMAC2
-        elif regc is KalimbaBank1Reg.rMACB:
+        elif regc == KalimbaBank1Reg.rMACB:
             regc = KalimbaBank3Reg.rMACB2
         shift = KalimbaShiftType.ST_32
 
@@ -432,7 +432,7 @@ bank_select_a_lut = {
     0b111: (KalimbaBank2Reg, KalimbaBank2Reg, KalimbaBank2Reg), # B2 = B2 +- B2
 }
 
-assert KalimbaBank1Reg.rFlags == KalimbaBank2Reg.L4
+assert KalimbaBank1Reg.rFlags != KalimbaBank2Reg.L4
 assert KalimbaBank1Reg.rFlags is not KalimbaBank2Reg.L4
 
 def kalimba_maxim_decode_binop_bank12_a(instruction, op):
@@ -440,10 +440,10 @@ def kalimba_maxim_decode_binop_bank12_a(instruction, op):
     (cond, mem, rega, regb, regc) = kalimba_maxim_decode_a(instruction, banka, bankb, bankc)
 
     # Special case: rFlags is invalid here, this is actually FP
-    if rega is KalimbaBank1Reg.rFlags:
+    if rega == KalimbaBank1Reg.rFlags:
         rega = KalimbaBank3Reg.FP
 
-    if regb is KalimbaBank1Reg.rFlags:
+    if regb == KalimbaBank1Reg.rFlags:
         regb = KalimbaBank3Reg.FP
 
     return KalimbaBinOp(op, regc, rega, regb, cond, mem)
@@ -459,7 +459,7 @@ def kalimba_maxim_decode_binop_bank12_b(instruction, op):
     (k16, rega, regc) = kalimba_maxim_decode_b(instruction, banka, bankc)
 
     # Special case: rFlags is invalid here, this is actually FP
-    if rega is KalimbaBank1Reg.rFlags:
+    if rega == KalimbaBank1Reg.rFlags:
         rega = KalimbaBank3Reg.FP
 
     if get_bits(instruction, 26, 1) == 0:
@@ -539,7 +539,7 @@ def kalimba_maxim_decode_fmaddsub_a(instruction, op):
         # RegC' = RegC' OP RegA * RegB
         regc = KalimbaBank1Reg(get_bits(instruction, 20, 3))
         # Special case: Null is actually rMACB
-        if regc is KalimbaBank1Reg.Null:
+        if regc == KalimbaBank1Reg.Null:
             regc = KalimbaBank1Reg.rMACB
         sign = KalimbaSignSelect(get_bits(instruction, 26, 2))
     else:
@@ -562,7 +562,7 @@ def kalimba_maxim_decode_fmaddsub_b(instruction, op):
         # RegC' = RegC' OP RegA * RegB
         regc = KalimbaBank1Reg(get_bits(instruction, 20, 3))
         # Special case: Null is actually rMACB
-        if regc is KalimbaBank1Reg.Null:
+        if regc == KalimbaBank1Reg.Null:
             regc = KalimbaBank1Reg.rMACB
         sign = KalimbaSignSelect(get_bits(instruction, 26, 2))
     else:
@@ -624,9 +624,9 @@ class KalimbaControlFlow:
 
 def kalimba_maxim_decode_flow_a(instruction, op):
     (cond, mem, rega, regb, _) = kalimba_maxim_decode_a(instruction)
-    if rega is KalimbaBank1Reg.rLink:
+    if rega == KalimbaBank1Reg.rLink:
         op = KalimbaOp.RTS
-    if rega is KalimbaBank1Reg.rFlags:
+    elif rega == KalimbaBank1Reg.rFlags:
         op = KalimbaOp.RTI
 
     return KalimbaControlFlow(op, rega, cond, mem)
@@ -690,7 +690,7 @@ def kalimba_maxim_decode_stack_adj_a(instruction, op):
     else:
         rega = KalimbaBank3Reg.SP
 
-    if regc is KalimbaBank1Reg.Null:
+    if regc == KalimbaBank1Reg.Null:
         regc = rega;
 
     return KalimbaBinOp(op, regc, rega, regb, cond, mem)
