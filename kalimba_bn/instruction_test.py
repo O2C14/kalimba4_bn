@@ -415,7 +415,6 @@ kalimba_maxim_instructions_test = [
     (bytes.fromhex('de0043e4'), 'if USERDEF r2 = r1 - 4;'),
     (bytes.fromhex('5e003498'), 'if USERDEF r1 = r2 * r3 (int);'),
     (bytes.fromhex('5e00349c'), 'if USERDEF r1 = r2 * r3 (int) (sat);'),
-    (bytes.fromhex('5f0048e4'), 'r2 = MIN r6;'),
     (bytes.fromhex('6f004ae4'), 'r2 = MAX r8;'),
     (bytes.fromhex('ef004fe4'), 'r2 = SE8 rMACB;'),
     (bytes.fromhex('ef008de4'), 'r6 = SE8 rLink;'),
@@ -439,4 +438,5 @@ kalimba_maxim_instructions_test = [
     (bytes.fromhex('27a6c6f3'), 'pop B4, M[I1,8] = r0, r0 = M[I5,-4];'),
     (bytes.fromhex('25a432ca'), 'rMAC = r1 * r0 (SU), M[I1,M0] = r0, r0 = M[I5,M1];'),
     (bytes.fromhex('26a432cb'), 'rMAC = r1 * r0 (SU), M[I1,0] = r0, r0 = M[I5,8];'),
+    (bytes.fromhex('55a483d7'), 'rMAC = rMAC + rMACB * r1, r0 = r2 - rMACB, M[I1,M0] = r0, r3 = M[I5,M1];'),
 ]

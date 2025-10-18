@@ -1310,7 +1310,7 @@ def test():
             if (instruction & mask) == value:
                 lut_idx -= set([i])
 
-    if len(lut_idx) != 0:
+    if len(lut_idx) != 0: # pragma: no cover
         print(f'Never visited:')
         for i in sorted(list(lut_idx)):
             print(f'    {maxim_ops_lut[i]}')
