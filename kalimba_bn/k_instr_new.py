@@ -788,13 +788,30 @@ def kalimba_maxim_decode_fmaddsub_creg(instruction, op, prefix):
     (mem1, mem2, rega, regc) = kalimba_maxim_decode_creg_c(instruction)
     sign = KalimbaSignSelect(get_bits(instruction, 26, 2))
 
-    return KalimbaFusedMultiplyAddSub(op, KalimbaBank1Reg.rMAC, regc, rega, sign, KalimbaCond.Always, mem1, mem2)
+    return KalimbaFusedMultiplyAddSub(op, KalimbaBank1Reg.rMAC, regc, rega, sign, KalimbaCond.Always, None, mem1, mem2)
 
 def kalimba_maxim_decode_fmaddsub_const(instruction, op, prefix):
     (mem1, mem2, rega, regc) = kalimba_maxim_decode_const_c(instruction)
     sign = KalimbaSignSelect(get_bits(instruction, 26, 2))
 
-    return KalimbaFusedMultiplyAddSub(op, KalimbaBank1Reg.rMAC, regc, rega, sign, KalimbaCond.Always, mem1, mem2)
+    return KalimbaFusedMultiplyAddSub(op, KalimbaBank1Reg.rMAC, regc, rega, sign, KalimbaCond.Always, None, mem1, mem2)
+
+def kalimba_maxim_decode_fmaddsub_cmac_common(rmac1, rmac2, instruction, op, prefix):
+    (mem1, mem2, rega, _) = kalimba_maxim_decode_creg_c(instruction)
+
+    regc = KalimbaBank1Reg(get_bits(instruction, 20, 3))
+    # Special case: Null is actually rMACB
+    if regc == KalimbaBank1Reg.Null:
+        regc = KalimbaBank1Reg.rMACB
+
+    regd = [KalimbaBank1Reg.r1, KalimbaBank1Reg.r2][get_bits(instruction, 23, 1)]
+    addsub_op = [KalimbaOp.ADD, KalimbaOp.SUB][get_bits(instruction, 24, 1)]
+    addsub = KalimbaExtraAddSub(addsub_op, regd, rmac2)
+
+    return KalimbaFusedMultiplyAddSub(op, rmac1, regc, rega, KalimbaSignSelect.SS, KalimbaCond.Always, addsub, mem1, mem2)
+
+kalimba_maxim_decode_fmaddsub_cmac  = partial(kalimba_maxim_decode_fmaddsub_cmac_common, KalimbaBank1Reg.rMAC,  KalimbaBank1Reg.rMACB)
+kalimba_maxim_decode_fmaddsub_cmacb = partial(kalimba_maxim_decode_fmaddsub_cmac_common, KalimbaBank1Reg.rMACB, KalimbaBank1Reg.rMAC)
 
 @dataclass(unsafe_hash=True)
 class KalimbaOffsetMemAccess:
@@ -1213,7 +1230,12 @@ maxim_ops_lut: List[Union[Tuple[int, int, KalimbaOp, Callable[[int, KalimbaOp, O
     (0b111111_11_00001100_00000000_00000000, 0b111_100_11_00000100_00000000_00000000, KalimbaOp.POP,  kalimba_maxim_decode_stack_const),
 
     # CMAC
-    #(0b111111_11_00001100_00000000_00000000, 0b111_100_10_00000000_00000000_00000000, KalimbaOp.FMADD, kalimba_maxim_decode_fmaddsub_cmac),
+    (0b111111_10_00001100_00000000_00000000, 0b110_101_10_00000000_00000000_00000000, KalimbaOp.FMADD, kalimba_maxim_decode_fmaddsub_cmac),  # rMAC += RegC'*RegA, r0 = RegD +- rMACB
+    (0b111111_10_00001100_00000000_00000000, 0b110_111_10_00000000_00000000_00000000, KalimbaOp.FMSUB, kalimba_maxim_decode_fmaddsub_cmac),  # rMAC -= RegC'*RegA, r0 = RegD +- rMACB
+    (0b111111_10_00001100_00000000_00000000, 0b111_000_10_00000000_00000000_00000000, KalimbaOp.MULX,  kalimba_maxim_decode_fmaddsub_cmac),  # rMAC  = RegC'*RegA, r0 = RegD +- rMACB
+    (0b111111_10_00001100_00000000_00000000, 0b111_001_10_00000000_00000000_00000000, KalimbaOp.FMADD, kalimba_maxim_decode_fmaddsub_cmacb), # rMACB += RegC'*RegA, r0 = RegD +- rMAC
+    (0b111111_10_00001100_00000000_00000000, 0b111_010_10_00000000_00000000_00000000, KalimbaOp.FMSUB, kalimba_maxim_decode_fmaddsub_cmacb), # rMACB -= RegC'*RegA, r0 = RegD +- rMAC
+    (0b111111_10_00001100_00000000_00000000, 0b111_011_10_00000000_00000000_00000000, KalimbaOp.MULX,  kalimba_maxim_decode_fmaddsub_cmacb), # rMACB  = RegC'*RegA, r0 = RegD +- rMAC
 
     # Subword A
     (0b11111111_00000000_00000000_00000000, 0b11110100_00000000_00000000_00000000, KalimbaOp.LOADW, kalimba_maxim_decode_subword_a),
@@ -1224,7 +1246,7 @@ maxim_ops_lut: List[Union[Tuple[int, int, KalimbaOp, Callable[[int, KalimbaOp, O
 ]
 
 def kalimba_maxim_lookup_decoder(instruction: int) -> Callable[[int, KalimbaOp, Optional[KalimbaPrefix]], KalimbaInstruction]:
-    for (mask, value, opcode, decode) in maxim_ops_lut:
+    for mask, value, opcode, decode in maxim_ops_lut:
         if (instruction & mask) == value:
             return (instruction, opcode, decode)
     raise ValueError(f'invalid instruction 0b{instruction:032b}') # pragma: no cover
@@ -1254,6 +1276,8 @@ def test():
     assert isinstance(prefix, KalimbaPrefix)
     assert str(prefix) == 'KalimbaPrefix(0x1234)'
 
+    instructions = [i]
+
     for (data, asm) in kalimba_maxim_instructions_test:
         try:
             (op, length) = kalimba_maxim_decode(data)
@@ -1272,12 +1296,24 @@ def test():
                 pass
                 #print(f'PASS: {op} | {asm} | {data[::-1].hex()}')
 
+            instructions += [int.from_bytes(data[-4:], 'little')]
         except ValueError as e: # pragma: no cover
             print(f'UNSUPPORTED: failed to decode "{data.hex()}" ("{asm}"): {e}')
         except Exception as e: # pragma: no cover
             print(f'ERROR: failed to decode "0b{int.from_bytes(data[:4], 'little'):032b}" ("{asm}")')
             print(f'                        "{data.hex()}" ("{asm}")')
             raise e
+
+    lut_idx = set([i for i in range(len(maxim_ops_lut))])
+    for instruction in instructions:
+        for i, (mask, value, _, _) in enumerate(maxim_ops_lut):
+            if (instruction & mask) == value:
+                lut_idx -= set([i])
+
+    if len(lut_idx) != 0:
+        print(f'Never visited:')
+        for i in sorted(list(lut_idx)):
+            print(f'    {maxim_ops_lut[i]}')
 
 if __name__ == '__main__': # pragma: no cover
     test()
