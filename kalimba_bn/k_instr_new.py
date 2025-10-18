@@ -339,18 +339,18 @@ def kalimba_maxim_decode_b(instruction: int, banka = KalimbaBank1Reg, bankc = Ka
 
     return (k16, rega, regc)
 
-def kalimba_maxim_decode_b_const_extend(op, k16, prefix):
-    k16u = signed_to_unsigned(k16, 16)
+def kalimba_maxim_decode_b_const_extend(op, kn, prefix, n = 16):
+    knu = signed_to_unsigned(kn, n)
     if not prefix:
-        if op in [KalimbaOp.AND, KalimbaOp.OR,KalimbaOp.XOR]:
-            return k16u
+        if op in [KalimbaOp.AND, KalimbaOp.OR, KalimbaOp.XOR]:
+            return knu
         elif op in [KalimbaOp.FMUL, KalimbaOp.FMADD, KalimbaOp.FMSUB]:
-            return k16 << 16
+            return knu << (n - 1)
         else:
-            # Sign extending is automatic
-            return k16
+            # Sign extension is automatic
+            return kn
     else:
-        return unsigned_to_signed(k16u | (prefix.const << 16), 32)
+        return unsigned_to_signed(knu | (prefix.const << n), 32)
 
 def kalimba_maxim_decode_binop_bank1_b(instruction, op, prefix):
     (k16, rega, regc) = kalimba_maxim_decode_b(instruction)
@@ -404,13 +404,14 @@ def kalimba_maxim_decode_shift_by_c_bank1_b(instruction, op, prefix):
 
 def kalimba_maxim_decode_shift_c_bank1_b(instruction, op, prefix):
     (k16, rega, regc) = kalimba_maxim_decode_b(instruction)
+    k32 = kalimba_maxim_decode_b_const_extend(op, k16, prefix)
 
     shift = KalimbaShiftType.ST_72
     if regc == KalimbaBank1Reg.rFlags:
         regc = KalimbaBank1Reg.rMAC
         shift = KalimbaShiftType.ST_32
 
-    return KalimbaBinOp(op, regc, k16, rega, KalimbaCond.Always, None, None, shift)
+    return KalimbaBinOp(op, regc, k32, rega, KalimbaCond.Always, None, None, shift)
 
 def kalimba_maxim_decode_mem1_common_c(instruction):
     mag1_k = get_bits(instruction, 8, 2)
@@ -822,6 +823,10 @@ class KalimbaControlFlow:
         t = f' {self.a}' if self.op in [KalimbaOp.JUMP, KalimbaOp.CALL, KalimbaOp.DOLOOP] else ''
         n = 'do' if self.op == KalimbaOp.DOLOOP else self.op.name.lower()
 
+        if isinstance(self.a, int) and self.a % 2 == 1 and self.op in [KalimbaOp.JUMP, KalimbaOp.CALL]:
+            n += ' (m)'
+            t = f' {self.a & -2}'
+
         return f'KalimbaControlFlow("{cond}{n}{t}{m}")'
 
 def kalimba_maxim_decode_flow_a(instruction, op, prefix):
@@ -1025,14 +1030,14 @@ def kalimba_maxim_decode_subword_b(instruction, op, prefix):
     bankc = bank_bit_lut[get_bits(instruction, 12, 1)]
     (_, rega, regc) = kalimba_maxim_decode_b(instruction, banka, bankc)
     k11 = get_bits_signed(instruction, 0, 11)
-    # k32 = kalimba_maxim_decode_b_const_extend(op, k11, prefix)
+    k32 = kalimba_maxim_decode_b_const_extend(op, k11, prefix, 11)
 
     if sel in [KalimbaSubWordMem.S_M, KalimbaSubWordMem.S_MB, KalimbaSubWordMem.S_MH]:
         op = KalimbaOp.STOREW
     else:
         op = KalimbaOp.LOADW
 
-    return KalimbaSubWordMemAccess(op, sel, regc, rega, k11)
+    return KalimbaSubWordMemAccess(op, sel, regc, rega, k32)
 
 @dataclass(unsafe_hash=True)
 class KalimbaPrefix:
