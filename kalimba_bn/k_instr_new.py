@@ -713,10 +713,12 @@ class KalimbaFusedMultiplyAddSub:
     sign: KalimbaSignSelect
     cond: KalimbaCond = KalimbaCond.Always
     addsub: Optional[KalimbaExtraAddSub] = None
-    mem: Optional[KalimbaIndexedMemAccess] = None
+    mem1: Optional[KalimbaIndexedMemAccess] = None
+    mem2: Optional[KalimbaIndexedMemAccess] = None
 
     def __str__(self):
-        m = f', {self.mem}' if self.mem else ''
+        m1 = f', {self.mem1}' if self.mem1 else ''
+        m2 = f', {self.mem2}' if self.mem2 else ''
         cond = '' if self.cond == KalimbaCond.Always else f'if {self.cond.name} '
         addsub = f', {self.addsub}' if self.addsub else ''
         sign = f' ({self.sign.name})'
@@ -730,9 +732,9 @@ class KalimbaFusedMultiplyAddSub:
 
         if self.op in fused_mul_symbols:
             op = fused_mul_symbols[self.op]
-            return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.c} {op} {self.a} * {b}{sign}{addsub}{m}")'
+            return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.c} {op} {self.a} * {b}{sign}{addsub}{m1}{m2}")'
         else:
-            return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.a} * {b}{sign}{addsub}{m}")'
+            return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.a} * {b}{sign}{addsub}{m1}{m2}")'
 
 def kalimba_maxim_decode_fmaddsub_a(instruction, op, prefix):
     (cond, mem, rega, regb, _) = kalimba_maxim_decode_a(instruction)
@@ -781,6 +783,18 @@ def kalimba_maxim_decode_fmaddsub_b(instruction, op, prefix):
     k32 = kalimba_maxim_decode_b_const_extend(op, k16, prefix, 16, sign in [KalimbaSignSelect.SS, KalimbaSignSelect.US])
 
     return KalimbaFusedMultiplyAddSub(op, regc, rega, k32, sign, KalimbaCond.Always, addsub)
+
+def kalimba_maxim_decode_fmaddsub_creg(instruction, op, prefix):
+    (mem1, mem2, rega, regc) = kalimba_maxim_decode_creg_c(instruction)
+    sign = KalimbaSignSelect(get_bits(instruction, 26, 2))
+
+    return KalimbaFusedMultiplyAddSub(op, KalimbaBank1Reg.rMAC, regc, rega, sign, KalimbaCond.Always, mem1, mem2)
+
+def kalimba_maxim_decode_fmaddsub_const(instruction, op, prefix):
+    (mem1, mem2, rega, regc) = kalimba_maxim_decode_const_c(instruction)
+    sign = KalimbaSignSelect(get_bits(instruction, 26, 2))
+
+    return KalimbaFusedMultiplyAddSub(op, KalimbaBank1Reg.rMAC, regc, rega, sign, KalimbaCond.Always, mem1, mem2)
 
 @dataclass(unsafe_hash=True)
 class KalimbaOffsetMemAccess:
@@ -893,7 +907,7 @@ class KalimbaStackOp:
         reg = None
         if len(self.reg) == 1:
             reg = self.reg[0].name
-        elif len(self.reg) > 1:
+        elif len(self.reg) > 1 or len(self.reg) == 0:
             assert self.op in [KalimbaOp.PUSHM, KalimbaOp.POPM]
 
             if self.new_stack_frame:
@@ -1064,7 +1078,7 @@ class KalimbaPrefix:
         return f'KalimbaPrefix(0x{self.const:x})'
 
 def kalimba_maxim_decode_prefix(instruction, op, prefix):
-    # assert not prefix
+    assert not prefix
     prefix = get_bits(instruction, 0, 21)
     return KalimbaPrefix(op, prefix)
 
@@ -1135,8 +1149,6 @@ maxim_ops_lut: List[Union[Tuple[int, int, KalimbaOp, Callable[[int, KalimbaOp, O
     (0b111111_11_00000000_00000000_00000000, 0b100_110_01_00000000_00000000_00000000, KalimbaOp.IMUL, kalimba_maxim_decode_binop_bank1_b),
     (0b111111_11_00000000_00000000_00000000, 0b100_111_01_00000000_00000000_00000000, KalimbaOp.SMUL, kalimba_maxim_decode_binop_bank1_b),
     (0b111111_11_00000000_00000000_00000000, 0b100_101_01_00000000_00000000_00000000, KalimbaOp.FMUL, kalimba_maxim_decode_binop_bank1_b),
-
-    # TODO: tests
     (0b111100_11_00000000_00000000_00000000, 0b101_000_01_00000000_00000000_00000000, KalimbaOp.FMADD, kalimba_maxim_decode_fmaddsub_b),
     (0b111100_11_00000000_00000000_00000000, 0b101_100_01_00000000_00000000_00000000, KalimbaOp.FMSUB, kalimba_maxim_decode_fmaddsub_b),
     (0b111100_11_00000000_00000000_00000000, 0b110_000_01_00000000_00000000_00000000, KalimbaOp.MULX,  kalimba_maxim_decode_fmaddsub_b),
@@ -1185,12 +1197,12 @@ maxim_ops_lut: List[Union[Tuple[int, int, KalimbaOp, Callable[[int, KalimbaOp, O
     (0b111111_11_00000000_00000000_00000000, 0b100_110_11_00000000_00000000_00000000, KalimbaOp.IMUL, kalimba_maxim_decode_binop_bank1_const),
     (0b111111_11_00000000_00000000_00000000, 0b100_111_11_00000000_00000000_00000000, KalimbaOp.SMUL, kalimba_maxim_decode_binop_bank1_const),
     (0b111111_11_00000000_00000000_00000000, 0b100_101_11_00000000_00000000_00000000, KalimbaOp.FMUL, kalimba_maxim_decode_binop_bank1_const),
-    # (0b111100_11_00000000_00000000_00000000, 0b101_000_10_00000000_00000000_00000000, KalimbaOp.FMADD, kalimba_maxim_decode_fmaddsub_creg),
-    # (0b111100_11_00000000_00000000_00000000, 0b101_000_10_00000000_00000000_00000000, KalimbaOp.FMSUB, kalimba_maxim_decode_fmaddsub_creg),
-    # (0b111100_11_00000000_00000000_00000000, 0b110_000_10_00000000_00000000_00000000, KalimbaOp.MULX,  kalimba_maxim_decode_fmaddsub_creg),
-    # (0b111100_11_00000000_00000000_00000000, 0b101_000_11_00000000_00000000_00000000, KalimbaOp.FMADD, kalimba_maxim_decode_fmaddsub_const),
-    # (0b111100_11_00000000_00000000_00000000, 0b101_000_11_00000000_00000000_00000000, KalimbaOp.FMSUB, kalimba_maxim_decode_fmaddsub_const),
-    # (0b111100_11_00000000_00000000_00000000, 0b110_000_11_00000000_00000000_00000000, KalimbaOp.MULX,  kalimba_maxim_decode_fmaddsub_const),
+    (0b111100_11_00000000_00000000_00000000, 0b101_000_10_00000000_00000000_00000000, KalimbaOp.FMADD, kalimba_maxim_decode_fmaddsub_creg),
+    (0b111100_11_00000000_00000000_00000000, 0b101_100_10_00000000_00000000_00000000, KalimbaOp.FMSUB, kalimba_maxim_decode_fmaddsub_creg),
+    (0b111100_11_00000000_00000000_00000000, 0b110_000_10_00000000_00000000_00000000, KalimbaOp.MULX,  kalimba_maxim_decode_fmaddsub_creg),
+    (0b111100_11_00000000_00000000_00000000, 0b101_000_11_00000000_00000000_00000000, KalimbaOp.FMADD, kalimba_maxim_decode_fmaddsub_const),
+    (0b111100_11_00000000_00000000_00000000, 0b101_100_11_00000000_00000000_00000000, KalimbaOp.FMSUB, kalimba_maxim_decode_fmaddsub_const),
+    (0b111100_11_00000000_00000000_00000000, 0b110_000_11_00000000_00000000_00000000, KalimbaOp.MULX,  kalimba_maxim_decode_fmaddsub_const),
     (0b111111_11_00000000_00000000_00000000, 0b110_100_10_00000000_00000000_00000000, KalimbaOp.LOAD,  kalimba_maxim_decode_load_creg),
     (0b111111_11_00000000_00000000_00000000, 0b110_100_11_00000000_00000000_00000000, KalimbaOp.LOAD,  kalimba_maxim_decode_load_const),
     (0b111111_11_00000000_00000000_00000000, 0b110_110_10_00000000_00000000_00000000, KalimbaOp.BSIGN, kalimba_maxim_decode_unop_bank1_creg),
@@ -1237,29 +1249,35 @@ def kalimba_maxim_decode(data: bytes) -> Tuple[KalimbaInstruction, int]:
 def test():
     from instruction_test import kalimba_maxim_instructions_test
 
+    (i, o, decode) = kalimba_maxim_lookup_decoder(int.from_bytes(bytes.fromhex('341200fd'), 'little'))
+    prefix = decode(i, o, None)
+    assert isinstance(prefix, KalimbaPrefix)
+    assert str(prefix) == 'KalimbaPrefix(0x1234)'
+
     for (data, asm) in kalimba_maxim_instructions_test:
         try:
             (op, length) = kalimba_maxim_decode(data)
             assert length == len(data)
 
-            asm = asm[:-1].replace(' EQ ', ' Z ').replace(' NE ', ' NZ ')
+            asm = asm.replace(';', '').replace(' EQ ', ' Z ').replace(' NE ', ' NZ ')
 
             asm_str = f'{type(op).__name__}("{asm}")'
             op_str = f'{op}'
 
-            # This is special case, can't be bothered to fix
-            if op_str == asm_str or op_str.replace(' (SS)', '') == asm_str:
+            # This is quite a special case, can't be bothered to fix
+            if op_str != asm_str and op_str.replace(' (SS)', '') != asm_str: # pragma: no cover
+                (instruction, opcode, decode) = kalimba_maxim_lookup_decoder(int.from_bytes(data[-4:], 'little'))
+                print(f'FAIL: {op} | {asm} | {data[::-1].hex()} | {decode}')
+            else:
+                pass
                 #print(f'PASS: {op} | {asm} | {data[::-1].hex()}')
-                continue
-            #assert f'{op}' == f'{type(op).__name__}("{asm}")', f'{op} != {type(op).__name__}("{asm}")'
-            (instruction, opcode, decode) = kalimba_maxim_lookup_decoder(int.from_bytes(data[-4:], 'little'))
-            print(f'FAIL: {op} | {asm} | {data[::-1].hex()} | {decode}')
-        except ValueError:
-            print(f'UNSUPPORTED: failed to decode "{data.hex()}" ("{asm}")')
-        except Exception as e:
+
+        except ValueError as e: # pragma: no cover
+            print(f'UNSUPPORTED: failed to decode "{data.hex()}" ("{asm}"): {e}')
+        except Exception as e: # pragma: no cover
             print(f'ERROR: failed to decode "0b{int.from_bytes(data[:4], 'little'):032b}" ("{asm}")')
             print(f'                        "{data.hex()}" ("{asm}")')
             raise e
 
-if __name__ == '__main__':
+if __name__ == '__main__': # pragma: no cover
     test()

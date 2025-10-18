@@ -153,6 +153,8 @@ kalimba_maxim_instructions_test = [
     (bytes.fromhex('fb26e0c4'), 'if LT r1 = Null * rMACB, r0 = r1 - rMACB, r0 = M[I1,M2];'),
     (bytes.fromhex('382157aa'), 'rMAC = rMAC + r3 * r5 (SU), r0 = M[I0,M1], r1 = M[I6,M0];'),
     (bytes.fromhex('382157ae'), 'rMAC = rMAC + r3 * r5 (SS), r0 = M[I0,M1], r1 = M[I6,M0];'),
+    (bytes.fromhex('382257ab'), 'rMAC = rMAC + r3 * r5 (SU), r0 = M[I0,8], r1 = M[I6,0];'),
+    (bytes.fromhex('3b2157af'), 'rMAC = rMAC + r3 * r5 (SS), r0 = M[I0,4], r1 = M[I6,-4];'),
     (bytes.fromhex('0000e0dd'), 'if USERDEF jump 0;'),
     (bytes.fromhex('3f1185f1'), 'SP = SP - 32, popm <I0, I1, I2, I3, I4, I5, M0, L0>;'),
     (bytes.fromhex('400000f4'), 'if EQ Null = MBS[Null + r2];'),
