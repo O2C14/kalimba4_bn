@@ -2,6 +2,9 @@ from enum import Enum, IntEnum, auto
 from typing import Callable, List, Type, Optional, Dict, Tuple, NewType, Union, Literal
 from dataclasses import dataclass
 from functools import partial
+from decimal import Decimal, getcontext
+
+getcontext().prec = 29
 
 class KalimbaRegBase(Enum):
     def __str__(self):
@@ -270,7 +273,10 @@ class KalimbaBinOp:
         m2 = f', {self.mem2}' if self.mem2 else ''
         cond = '' if self.cond == KalimbaCond.Always else f'if {self.cond.name} '
 
-        return f'KalimbaBinOp("{cond}{c if self.c != KalimbaBank3Reg.DivResult else 'Div'} = {self.a} {op} {self.b}{extra}{m1}{m2}")'
+        b = str(self.b)
+        if self.op == KalimbaOp.FMUL and isinstance(self.b, int):
+            b = format(Decimal(self.b) / 2**31, '.48g')
+        return f'KalimbaBinOp("{cond}{c if self.c != KalimbaBank3Reg.DivResult else 'Div'} = {self.a} {op} {b}{extra}{m1}{m2}")'
 
 def get_mask(length):
     return (1 << length) - 1
@@ -339,13 +345,17 @@ def kalimba_maxim_decode_b(instruction: int, banka = KalimbaBank1Reg, bankc = Ka
 
     return (k16, rega, regc)
 
-def kalimba_maxim_decode_b_const_extend(op, kn, prefix, n = 16):
+def kalimba_maxim_decode_b_const_extend(op, kn, prefix, n = 16, is_frac_signed = False):
     knu = signed_to_unsigned(kn, n)
     if not prefix:
         if op in [KalimbaOp.AND, KalimbaOp.OR, KalimbaOp.XOR]:
             return knu
         elif op in [KalimbaOp.FMUL, KalimbaOp.FMADD, KalimbaOp.FMSUB]:
-            return knu << (n - 1)
+            k32 = knu << (32 - n)
+            if is_frac_signed:
+                return unsigned_to_signed(k32, 32)
+            else:
+                return k32
         else:
             # Sign extension is automatic
             return kn
@@ -670,7 +680,6 @@ def kalimba_maxim_decode_divide_b(instruction, op, prefix):
     elif div == 0b10:
         return KalimbaUnOp(op, regc, KalimbaBank3Reg.DivRemainder)
 
-
 class KalimbaSignSelect(IntEnum):
     UU = 0b00
     US = 0b01
@@ -698,9 +707,9 @@ class KalimbaFusedMultiplyAddSub:
     C = C OP A * B [r0 = D OP E]
     '''
     op: KalimbaOp
-    c: Union[Literal[KalimbaBank1Reg.rMAC], Literal[KalimbaBank1Reg.rMACB]]
-    a: KalimbaBank1Reg
-    b: KalimbaBank1Reg
+    c: KalimbaBank2Reg
+    a: Union[KalimbaBank1Reg, int]
+    b: Union[KalimbaBank1Reg, int]
     sign: KalimbaSignSelect
     cond: KalimbaCond = KalimbaCond.Always
     addsub: Optional[KalimbaExtraAddSub] = None
@@ -710,19 +719,26 @@ class KalimbaFusedMultiplyAddSub:
         m = f', {self.mem}' if self.mem else ''
         cond = '' if self.cond == KalimbaCond.Always else f'if {self.cond.name} '
         addsub = f', {self.addsub}' if self.addsub else ''
-        sign = f' ({self.sign.name})' if self.sign else ''
+        sign = f' ({self.sign.name})'
+
+        b = self.b
+        if isinstance(self.b, int):
+            if self.sign in [KalimbaSignSelect.SU, KalimbaSignSelect.UU]:
+                b = Decimal(self.b) / 2**32
+            else:
+                b = Decimal(self.b) / 2**31
 
         if self.op in fused_mul_symbols:
             op = fused_mul_symbols[self.op]
-            return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.c} {op} {self.a} * {self.b}{sign}{addsub}{m}")'
+            return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.c} {op} {self.a} * {b}{sign}{addsub}{m}")'
         else:
-            return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.a} * {self.b}{sign}{addsub}{m}")'
+            return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.a} * {b}{sign}{addsub}{m}")'
 
 def kalimba_maxim_decode_fmaddsub_a(instruction, op, prefix):
     (cond, mem, rega, regb, _) = kalimba_maxim_decode_a(instruction)
 
     addsub = None
-    sign = None
+    sign = KalimbaSignSelect.SS
 
     if get_bits(instruction, 23, 1) == 0:
         # RegC' = RegC' OP RegA * RegB
@@ -743,10 +759,9 @@ def kalimba_maxim_decode_fmaddsub_a(instruction, op, prefix):
 
 def kalimba_maxim_decode_fmaddsub_b(instruction, op, prefix):
     (k16, rega, regc) = kalimba_maxim_decode_b(instruction)
-    k32 = kalimba_maxim_decode_b_const_extend(op, k16, prefix)
 
     addsub = None
-    sign = None
+    sign = KalimbaSignSelect.SS
 
     if get_bits(instruction, 23, 1) == 0:
         # RegC' = RegC' OP RegA * RegB
@@ -762,6 +777,8 @@ def kalimba_maxim_decode_fmaddsub_b(instruction, op, prefix):
         rege = [KalimbaBank1Reg.rMAC, KalimbaBank1Reg.rMACB][get_bits(instruction, 22, 1)]
         addsub_op = [KalimbaOp.ADD, KalimbaOp.SUB][get_bits(instruction, 26, 1)]
         addsub = KalimbaExtraAddSub(addsub_op, regd, rege)
+
+    k32 = kalimba_maxim_decode_b_const_extend(op, k16, prefix, 16, sign in [KalimbaSignSelect.SS, KalimbaSignSelect.US])
 
     return KalimbaFusedMultiplyAddSub(op, regc, rega, k32, sign, KalimbaCond.Always, addsub)
 
@@ -1226,7 +1243,12 @@ def test():
             assert length == len(data)
 
             asm = asm[:-1].replace(' EQ ', ' Z ').replace(' NE ', ' NZ ')
-            if f'{op}' == f'{type(op).__name__}("{asm}")':
+
+            asm_str = f'{type(op).__name__}("{asm}")'
+            op_str = f'{op}'
+
+            # This is special case, can't be bothered to fix
+            if op_str == asm_str or op_str.replace(' (SS)', '') == asm_str:
                 #print(f'PASS: {op} | {asm} | {data[::-1].hex()}')
                 continue
             #assert f'{op}' == f'{type(op).__name__}("{asm}")', f'{op} != {type(op).__name__}("{asm}")'

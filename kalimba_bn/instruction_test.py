@@ -1,4 +1,8 @@
 kalimba_maxim_instructions_test = [
+    (bytes.fromhex('00c012ad'), 'rMAC = rMAC + r0 * -0.5 (SS);'),
+    (bytes.fromhex('00c012a5'), 'rMAC = rMAC + r0 * -0.5 (US);'),
+    (bytes.fromhex('00c000fd000012ad'), 'rMAC = rMAC + r0 * -0.5 (SS);'),
+    (bytes.fromhex('00c000fd000012a5'), 'rMAC = rMAC + r0 * -0.5 (US);'),
     (bytes.fromhex('341200fd7856f0dd'), 'jump 305419896;'),
     (bytes.fromhex('341200fd7856f0e1'), 'call 305419896;'),
     (bytes.fromhex('341200fd7956f0e1'), 'call (m) 305419896;'),
