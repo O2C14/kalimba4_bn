@@ -97,13 +97,13 @@ def kalimba_minim_decode_mov_add_b(instruction, op):
 def kalimba_minim_decode_add_sub_b(instruction, op):
     rega, regb, regc = kalimba_minim_decode_regs_a(instruction)
     K = (get_bits(instruction, 11, 2) << 4) + get_bits(instruction, 6, 4)
-    return KalimbaBinOp(op, regc, regb, K)
+    return KalimbaBinOp(op, regc, rega, K)
 
 
 def kalimba_minim_decode_fp_adjust_b(instruction, op):
     regc = KalimbaBank1Reg(get_bits(instruction, 0, 3))
     K = (get_bits(instruction, 14, 1) << 6) + get_bits(instruction, 6, 6)
-    return KalimbaBinOp(op, regc, KalimbaBank3Reg.FP, K)
+    return KalimbaBinOp(op, regc, KalimbaBank3Reg.FP, K * 4)
 
 
 def kalimba_minim_decode_pushm_popm(instruction, op):
@@ -124,6 +124,8 @@ def kalimba_minim_decode_pushm_popm(instruction, op):
 
 def kalimba_minim_decode_call_jump_regc(instruction, op):
     rega, regb, regc = kalimba_minim_decode_regs_a(instruction)
+    if regc == KalimbaBank1Reg.Null:
+        op = KalimbaOp.RTS
     return KalimbaControlFlow(op, regc, KalimbaCond.Always, None)
 
 
@@ -142,7 +144,7 @@ def kalimba_minim_decode_call_jump_do_k(instruction, op):
 
 def kalimba_minim_decode_sp_adjust(instruction, op):
     K = nbits_unsigned_to_signed(get_bits(instruction, 0, 6), 6)
-    return KalimbaBinOp(op, KalimbaBank3Reg.SP, KalimbaBank3Reg.SP, K)
+    return KalimbaBinOp(op, KalimbaBank3Reg.SP, KalimbaBank3Reg.SP, K * 4)
 
 
 def kalimba_minim_decode_div(instruction, op):
@@ -162,6 +164,10 @@ def kalimba_minim_decode_div_result(instruction, op):
 def kalimba_minim_decode_subword_a(instruction, op):
     rw_data_sel = get_bits(instruction, 9, 3)
     sel = KalimbaSubWordMem(rw_data_sel)
+    if sel in [KalimbaSubWordMem.S_M, KalimbaSubWordMem.S_MB, KalimbaSubWordMem.S_MH]:
+        op = KalimbaOp.STOREW
+    else:
+        op = KalimbaOp.LOADW
     rega, regb, regc = kalimba_minim_decode_regs_a(instruction)
     if rega == KalimbaBank1Reg.Null:
         rega = KalimbaBank3Reg.FP
@@ -171,19 +177,35 @@ def kalimba_minim_decode_subword_a(instruction, op):
 def kalimba_minim_decode_subword_b(instruction, op):
     rw_data_sel = get_bits(instruction, 9, 3)
     sel = KalimbaSubWordMem(rw_data_sel)
+    if sel in [KalimbaSubWordMem.S_M, KalimbaSubWordMem.S_MB, KalimbaSubWordMem.S_MH]:
+        op = KalimbaOp.STOREW
+    else:
+        op = KalimbaOp.LOADW
     rega, regb, regc = kalimba_minim_decode_regs_a(instruction)
     if rega == KalimbaBank1Reg.Null:
         rega = KalimbaBank3Reg.FP
     K = (get_bits(instruction, 12, 2) << 3) + get_bits(instruction, 6, 3)
+    if sel in [KalimbaSubWordMem.L_MHS,KalimbaSubWordMem.L_MHU, KalimbaSubWordMem.S_MH]:
+        K *= 2
+    if sel in [KalimbaSubWordMem.L_M,KalimbaSubWordMem.S_M]:
+        K *= 4
     return KalimbaSubWordMemAccess(op, sel, regc, rega, K)
 
 
 def kalimba_minim_decode_subword_fp(instruction, op):
     rw_data_sel = get_bits(instruction, 9, 3)
     sel = KalimbaSubWordMem(rw_data_sel)
+    if sel in [KalimbaSubWordMem.S_M, KalimbaSubWordMem.S_MB, KalimbaSubWordMem.S_MH]:
+        op = KalimbaOp.STOREW
+    else:
+        op = KalimbaOp.LOADW
     regc = KalimbaBank1Reg(get_bits(instruction, 0, 3))
     rega = KalimbaBank3Reg.FP
     K = get_bits(instruction, 3, 6)
+    if sel in [KalimbaSubWordMem.L_MHS,KalimbaSubWordMem.L_MHU, KalimbaSubWordMem.S_MH]:
+        K *= 2
+    if sel in [KalimbaSubWordMem.L_M,KalimbaSubWordMem.S_M]:
+        K *= 4
     return KalimbaSubWordMemAccess(op, sel, regc, rega, K)
 
 
@@ -223,7 +245,7 @@ minim_unprefixed_instructions = [
     (0b1111_100_000_000_000, 0b1100_100_000_000_000, KalimbaOp.OR, kalimba_minim_decode_a_op_b_typeb),  # B
     (0b1111_000_000_000_000, 0b1101_000_000_000_000, KalimbaOp.LOADW, kalimba_minim_decode_subword_fp),
     (0b1111_000_000_000_000, 0b1110_000_000_000_000, KalimbaOp.LOADW, kalimba_minim_decode_subword_a),  # A
-    (0b1111_000_000_000_000, 0b1111_000_000_000_000, KalimbaOp.PREFIX, 0),
+    (0b1111_000_000_000_000, 0b1111_000_000_000_000, KalimbaOp.PREFIX, None),
 ]
 
 
@@ -365,10 +387,16 @@ def kalimba_minim_decode_prefixed_subword_b(instruction, op, prefixes):
             sign_extended = True
     rw_data_sel = get_bits(instruction, 9, 3)
     sel = KalimbaSubWordMem(rw_data_sel)
-
+    if sel in [KalimbaSubWordMem.S_M, KalimbaSubWordMem.S_MB, KalimbaSubWordMem.S_MH]:
+        op = KalimbaOp.STOREW
+    else:
+        op = KalimbaOp.LOADW
     if sign_extended:
         K = nbits_unsigned_to_signed(K, total_len)
-
+    if sel in [KalimbaSubWordMem.L_MHS,KalimbaSubWordMem.L_MHU, KalimbaSubWordMem.S_MH]:
+        K *= 2
+    if sel in [KalimbaSubWordMem.L_M,KalimbaSubWordMem.S_M]:
+        K *= 4
     rega = reg_bank_lut[get_bits(
         prefixes[-1], 10, 1) + 1](get_bits(prefixes[-1], 4, 4))
     regc = reg_bank_lut[get_bits(
@@ -390,6 +418,10 @@ def kalimba_minim_decode_prefixed_subword_a(instruction, op, prefixes):
 
     rw_data_sel = get_bits(instruction, 9, 3)
     sel = KalimbaSubWordMem(rw_data_sel)
+    if sel in [KalimbaSubWordMem.S_M, KalimbaSubWordMem.S_MB, KalimbaSubWordMem.S_MH]:
+        op = KalimbaOp.STOREW
+    else:
+        op = KalimbaOp.LOADW
     is_sub = False
     if get_bits(instruction, 8, 1) == 1:
         is_sub = True
@@ -569,7 +601,7 @@ minim_prefixed_instructions = [
     (0b1111_000_011_110_000, 0b1110_000_001_000_000, KalimbaOp.PUSHM, kalimba_minim_decode_prefixed_pushm_popm),
     (0b1111_000_011_100_000, 0b1110_000_001_100_000, KalimbaOp.POPM, kalimba_minim_decode_prefixed_pushm_popm),  # rts
     (0b1111_111_111_111_000, 0b1110_110_001_000_000, KalimbaOp.DOLOOP, kalimba_minim_decode_prefixed_doloop),
-    (0b1111_000_000_000_000, 0b1111_000_000_000_000, KalimbaOp.PREFIX, 0),
+    (0b1111_000_000_000_000, 0b1111_000_000_000_000, KalimbaOp.PREFIX, None),
 ]
 
 
@@ -577,39 +609,27 @@ def kalimba_maxim_decode(data: bytes, addr: int):
     prefixes = []
     offset = 0
     if len(data) < 2:
-        return 0
-    (instruction, ) = unpack('<H', data[offset:offset+2])
-    # log_info(f'instr :{hex(instr)} len{len(data)}')
+        return 0, None
+    (instruction, ) = unpack('<H', data[offset:offset + 2])
     offset += 2
     opcode = get_bits(instruction, 12, 4)
 
     while opcode == 0b1111:  # PREFIX
         prefixes.append(get_bits(instruction, 0, 12))
         if len(data) < offset + 2:
-            return 0
-        (instruction, ) = unpack('<H', data[offset:offset+2])
+            return 0, None
+        (instruction, ) = unpack('<H', data[offset:offset + 2])
         offset += 2
         opcode = get_bits(instruction, 12, 4)
 
-    len_prefixes = len(prefixes)
-    print(hex(addr), end=' ')
-
-    if len_prefixes == 0:
-        # print(f'{instr:b}')
+    if len(prefixes) == 0:
         for mask, value, op, func in minim_unprefixed_instructions:
             if (instruction & mask) == value:
-                # print(op.name)
-                print(func(instruction, op).__str__())
-
-                break
+                return offset, func(instruction, op)
     else:
         for mask, value, op, func in minim_prefixed_instructions:
             if (instruction & mask) == value:
-                # print(op.name)
-                print(func(instruction, op, prefixes).__str__())
-                break
-    return offset
-
+                return offset, func(instruction, op, prefixes)
 
 if __name__ == '__main__':
     import os
@@ -619,7 +639,9 @@ if __name__ == '__main__':
         data = f.read(0xcbf4 - 0x180)
         length = 0
         while True:
-            inc = kalimba_maxim_decode(data[length:], length + 0x180)
+            addr = length + 0x180
+            inc, dec_data = kalimba_maxim_decode(data[length:], addr)
             if inc == 0:
                 break
+            print(hex(addr), dec_data.__str__())
             length += inc
