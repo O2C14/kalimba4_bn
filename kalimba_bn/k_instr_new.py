@@ -176,7 +176,7 @@ class KalimbaOp(IntEnum):
     STOREW = auto() # Subword store
     PREFIX = auto() # 32-bit constant prefix
     UNUSED = auto() # Reserved
-
+    INSERT32 = auto() # MaxiM instruction encoded with MiniM insert32
 unop_symbols = {
     KalimbaOp.SIGN:  'SIGNDET',
     KalimbaOp.BSIGN: 'BLKSIGNDET',
