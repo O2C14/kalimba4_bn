@@ -130,7 +130,6 @@ def kalimba_minim_decode_call_jump_regc(instruction, op):
 
 
 def kalimba_minim_decode_call_jump_do_k(instruction, op):
-    # TODO K
     cond = KalimbaCond.Always
     if op == KalimbaOp.CALL:
         K = nbits_unsigned_to_signed(instruction & 0xff, 9)
@@ -139,7 +138,7 @@ def kalimba_minim_decode_call_jump_do_k(instruction, op):
         cond = KalimbaCond(cond_3bit_map_to_4bit[get_bits(instruction, 9, 3)])
     elif op == KalimbaOp.DOLOOP:
         K = instruction & 0x3f
-    return KalimbaControlFlow(op, K * 2, cond, None)
+    return KalimbaControlFlow(op, K * 2 + 1, cond, None) #TODO do (m)
 
 
 def kalimba_minim_decode_sp_adjust(instruction, op):
@@ -443,12 +442,11 @@ def kalimba_minim_decode_prefixed_jump(instruction, op, prefixes):
         total_len += pre_prefix_len
         if (K & (1 << (main_code_and_prefix_len + pre_prefix_len - 1))) != 0:
             sign_extended = True
-    if (K & 1) != 0:
-        K -= 1
+
     if sign_extended:
         K = nbits_unsigned_to_signed(K, total_len)
     cond = KalimbaCond(get_bits(instruction, 0, 4))
-    return KalimbaControlFlow(op, K * 2, cond, None)
+    return KalimbaControlFlow(op, K, cond, None)
 
 
 def kalimba_minim_decode_prefixed_call(instruction, op, prefixes):
@@ -470,11 +468,10 @@ def kalimba_minim_decode_prefixed_call(instruction, op, prefixes):
         total_len += pre_prefix_len
         if (K & (1 << (main_code_and_prefix_len + pre_prefix_len - 1))) != 0:
             sign_extended = True
-    if (K & 1) != 0:
-        K -= 1
+
     if sign_extended:
         K = nbits_unsigned_to_signed(K, total_len)
-    return KalimbaControlFlow(op, K * 2, cond, None)
+    return KalimbaControlFlow(op, K, cond, None)
 
 
 def kalimba_minim_decode_prefixed_push(instruction, op, prefixes):
@@ -532,12 +529,13 @@ def kalimba_minim_decode_prefixed_doloop(instruction, op, prefixes):
 
     if sign_extended:
         K = nbits_unsigned_to_signed(K, total_len)
-    return KalimbaControlFlow(op, K * 2, KalimbaCond.Always, None)
+    return KalimbaControlFlow(op, K, KalimbaCond.Always, None)
 
 
 def kalimba_minim_decode_prefixed_insert32(instruction, op, prefixes):
     maxim_instruction_type = get_bits(instruction, 4, 2)
     prefixes_len = len(prefixes)
+    maxim_prefix = None
     if maxim_instruction_type == 0b00:  # Type A
         maxim_instruction = (get_bits(instruction, 0, 12) << 20) + \
             (get_bits(prefixes[-1], 8, 4) << 16) + get_bits(prefixes[-1], 0, 8)
@@ -559,14 +557,14 @@ def kalimba_minim_decode_prefixed_insert32(instruction, op, prefixes):
                 K = K20 + 0xFFF00000
             maxim_instruction = (get_bits(instruction, 0, 12) << 20) + \
                 (get_bits(prefixes[-1], 8, 4) << 16) + (K & 0xffff)
-            # TODO MaxiM Prefix
+            maxim_prefix = KalimbaPrefix(KalimbaOp.PREFIX, K >> 16)
 
         elif prefixes_len == 3:
             K = (prefixes[-3] << 20) + (prefixes[-2] << 8) + \
                 get_bits(prefixes[-1], 0, 8)
             maxim_instruction = (get_bits(instruction, 0, 12) << 20) + \
                 (get_bits(prefixes[-1], 8, 4) << 16) + (K & 0xffff)
-            # TODO MaxiM Prefix
+            maxim_prefix = KalimbaPrefix(KalimbaOp.PREFIX, K >> 16)
 
     elif maxim_instruction_type == 0b10 or maxim_instruction_type == 0b11:
         if get_bits(instruction, 12, 4) == 0b1100:  # Type C INS
@@ -584,7 +582,7 @@ def kalimba_minim_decode_prefixed_insert32(instruction, op, prefixes):
             get_bits(prefixes[-1], 0, 8)
     instruction, opcode, decode = kalimba_maxim_lookup_decoder(
         maxim_instruction)
-    return decode(instruction, opcode, None)
+    return decode(instruction, opcode, maxim_prefix)
 
 
 minim_prefixed_instructions = [
