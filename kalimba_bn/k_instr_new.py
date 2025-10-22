@@ -69,7 +69,7 @@ class KalimbaBank3Reg(KalimbaRegBase):
     FP           = 14
     SP           = 15
 
-type KalimbaReg = Union[KalimbaBank1Reg, KalimbaBank2Reg, KalimbaBank3Reg]
+KalimbaReg = Union[KalimbaBank1Reg, KalimbaBank2Reg, KalimbaBank3Reg]
 
 class KalimbaSubWordMem(IntEnum):
     L_MBS = 0b000 # Load signed byte (SE)
@@ -275,8 +275,8 @@ binop_symbols = {
     KalimbaOp.DIV:  ('/', ''),
 }
 
-type KalimbaDstOp = Union[KalimbaWordMem, KalimbaReg]
-type KalimbaSrcOp = Union[KalimbaWordMem, KalimbaReg, int]
+KalimbaDstOp = Union[KalimbaWordMem, KalimbaReg]
+KalimbaSrcOp = Union[KalimbaWordMem, KalimbaReg, int]
 
 class KalimbaShiftType(IntEnum):
     ST_32 = 0
@@ -326,7 +326,8 @@ class KalimbaBinOp:
         b = str(self.b)
         if self.op == KalimbaOp.FMUL and isinstance(self.b, int):
             b = format(Decimal(self.b) / 2**31, '.48g')
-        return f'KalimbaBinOp("{cond}{c if self.c != KalimbaBank3Reg.DivResult else 'Div'} = {self.a} {op} {b}{extra}{m1}{m2}")'
+        tmp = c if self.c != KalimbaBank3Reg.DivResult else 'Div'
+        return f'KalimbaBinOp("{cond}{tmp} = {self.a} {op} {b}{extra}{m1}{m2}")'
     def llil(self, il: LowLevelILFunction, addr: int, length: int):
         return
 
@@ -747,7 +748,8 @@ class KalimbaExtraAddSub:
     def __str__(self):
         op = binop_symbols[self.op][0]
         return f'{KalimbaBank1Reg.r0} = {self.a} {op} {self.b}'
-
+    def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        return
 fused_mul_symbols = {
     KalimbaOp.FMADD: '+',
     KalimbaOp.FMSUB: '-',
@@ -787,7 +789,8 @@ class KalimbaFusedMultiplyAddSub:
             return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.c} {op} {self.a} * {b}{sign}{addsub}{m1}{m2}")'
         else:
             return f'KalimbaFusedMultiplyAddSub("{cond}{self.c} = {self.a} * {b}{sign}{addsub}{m1}{m2}")'
-
+    def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        return
 def kalimba_maxim_decode_fmaddsub_a(instruction, op, prefix):
     (cond, mem, rega, regb, _) = kalimba_maxim_decode_a(instruction)
 
@@ -931,6 +934,8 @@ class KalimbaControlFlow:
 
         return f'KalimbaControlFlow("{cond}{n}{t}{m}")'
     def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        if self.cond == KalimbaCond.Always:
+            return
         t = None
         if isinstance(self.a, int):
             t = il.get_label_for_address(Architecture['KALIMBA'], self.a + addr)
@@ -945,7 +950,7 @@ class KalimbaControlFlow:
             il.mark_label(t)
 
         if isinstance(self.a, int):
-            dest = il.const(4, self.a + addr)
+            dest = il.const(4, (self.a & -2) + addr)
         else:
             dest = il.reg(self.a.name)
 
@@ -1008,9 +1013,9 @@ class KalimbaStackOp:
             assert self.op in [KalimbaOp.PUSHM, KalimbaOp.POPM]
 
             if self.new_stack_frame:
-                reg = f'<{', '.join(map(reg_str_fp_special, self.reg))}>'
+                reg = f'<{", ".join(map(reg_str_fp_special, self.reg))}>'
             else:
-                reg = f'<{', '.join(map(lambda x: x.name, self.reg))}>'
+                reg = f'<{", ".join(map(lambda x: x.name, self.reg))}>'
         else:
             raise ValueError('unreachable') # pragma: no cover
 
@@ -1022,6 +1027,12 @@ class KalimbaStackOp:
         else:
             return f'KalimbaStackOp("{cond}{self.op.name.lower()} {reg}{m1}{m2}")'
     def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        if self.op in [KalimbaOp.PUSH, KalimbaOp.PUSHM]:
+            if KalimbaBank3Reg.FP in self.reg:
+                il.append(il.set_reg(4, il.reg(4, KalimbaBank3Reg.FP.name),il.reg(4, KalimbaBank3Reg.SP.name)))
+        for reg in self.reg:
+            il.append(il.push(4, il.reg(4, reg.name)))#TODO rMAC(B) size
+
         return
 
 def kalimba_maxim_decode_stack_a(instruction, op, prefix):
@@ -1053,7 +1064,8 @@ class KalimbaPushOff:
     off: int
     def __str__(self):
         return f'KalimbaPushOff("{self.op.name.lower()} {self.reg} + {self.off}")'
-
+    def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        return
 def kalimba_maxim_decode_stack_b(instruction, op, prefix):
     banksel = get_bits(instruction, 16, 2)
 
@@ -1137,27 +1149,49 @@ class KalimbaSubWordMemAccess:
             raise ValueError(f'invalid mem op: {self.op}') # pragma: no cover
     def llil(self, il: LowLevelILFunction, addr: int, length: int):
         if isinstance(self.b, int):
-            il_regb_k = il.const(4,self.b)
+            if self.a != KalimbaBank1Reg.Null:
+                il_regb_k = il.const(4, self.b)
+            else:
+                il_regb_k = il.const(4, self.b & 0xffffffff)
         else:
             il_regb_k = il.reg(4, self.b.name)
         if self.a != KalimbaBank1Reg.Null:
             addr = il.add(4, il.reg(4, self.a.name), il_regb_k)
         else:
             addr = il_regb_k
-        if self.sel in [KalimbaSubWordMem.L_MBS, KalimbaSubWordMem.L_MBU]:
-            expr = il.set_reg(4, self.c.name, il.load(1, addr), flags='zn')
-        if self.sel in [KalimbaSubWordMem.L_MHS, KalimbaSubWordMem.L_MHU]:
-            expr = il.set_reg(4, self.c.name, il.load(2, addr), flags='zn')
-        if self.sel == KalimbaSubWordMem.L_M:
-            expr = il.set_reg(4, self.c.name, il.load(4, addr), flags='zn')
-        if self.sel == KalimbaSubWordMem.S_MB:
-            expr = il.store(1, addr, il.reg(4, self.c.name), flags='zn')
-        if self.sel == KalimbaSubWordMem.S_MH:
-            expr = il.store(2, addr, il.reg(4, self.c.name), flags='zn')
-        if self.sel == KalimbaSubWordMem.S_M:
-            expr = il.store(4, addr, il.reg(4, self.c.name), flags='zn')
+        load_dic = {
+            KalimbaSubWordMem.L_MBS: lambda il,addr:il.sign_extend(4, il.load(1, addr)),
+            KalimbaSubWordMem.L_MBU: lambda il,addr:il.zero_extend(4, il.load(1, addr)),
+            KalimbaSubWordMem.L_MHS: lambda il,addr:il.sign_extend(4, il.load(2, addr)),
+            KalimbaSubWordMem.L_MHU: lambda il,addr:il.zero_extend(4, il.load(2, addr)),
+            KalimbaSubWordMem.L_M: lambda il,addr: il.load(4, addr),
+        }
+        store_dic = {
+            KalimbaSubWordMem.S_MB:lambda il,addr,src_expr: il.store(1, addr, src_expr),
+            KalimbaSubWordMem.S_MH:lambda il,addr,src_expr: il.store(2, addr, src_expr),
+            KalimbaSubWordMem.S_M:lambda il,addr,src_expr: il.store(4, addr, src_expr)
+        }
+        if self.sel in load_dic:
+            src_expr = load_dic[self.sel](il,addr)
+            expr = il.set_reg(4, self.c.name, src_expr)
+        if self.sel in store_dic:
+            if self.c != KalimbaBank1Reg.Null:
+                src_expr = il.reg(4, self.c.name)
+            else:
+                src_expr = il.const(4, 0)
+            expr = store_dic[self.sel](il, addr, src_expr)
+        z_cond = il.compare_equal(4, src_expr, il.const(4, 0))
+        n_cond = il.compare_signed_less_than(4, src_expr, il.const(4, 0))
 
-        il.append(expr)
+        if self.c == KalimbaBank1Reg.Null and self.sel in [KalimbaSubWordMem.L_MBS, KalimbaSubWordMem.L_MBU, KalimbaSubWordMem.L_MHS, KalimbaSubWordMem.L_MHU, KalimbaSubWordMem.L_M] :
+            pass
+        else:
+            il.append(expr)
+
+        il.append(il.set_flag(KalimbaFlags.Z.name, z_cond))
+        il.append(il.set_flag(KalimbaFlags.C.name, il.const(0, 0)))
+        il.append(il.set_flag(KalimbaFlags.N.name, n_cond))
+        il.append(il.set_flag(KalimbaFlags.V.name, il.const(0, 0)))
         return
 
 bank_bit_lut = [KalimbaBank1Reg, KalimbaBank2Reg]
@@ -1205,11 +1239,11 @@ def kalimba_maxim_decode_prefix(instruction, op, prefix):
     prefix = get_bits(instruction, 0, 21)
     return KalimbaPrefix(op, prefix)
 
-type KalimbaInstruction = Union[KalimbaUnOp, KalimbaBinOp, KalimbaFusedMultiplyAddSub, KalimbaOffsetMemAccess, KalimbaControlFlow, KalimbaSubWordMemAccess, KalimbaPushOff]
+KalimbaInstruction = Union[KalimbaUnOp, KalimbaBinOp, KalimbaFusedMultiplyAddSub, KalimbaOffsetMemAccess, KalimbaControlFlow, KalimbaSubWordMemAccess, KalimbaPushOff]
 
 # mask, value, operation, decode
 maxim_ops_lut: List[Union[Tuple[int, int, KalimbaOp, Callable[[int, KalimbaOp, Optional[KalimbaPrefix]], KalimbaInstruction]], Tuple[int, int, KalimbaOp]]] = [
-    # Type A
+    # A
     (0b111001_11_00000000_00000000_00000000, 0b000_000_00_00000000_00000000_00000000, KalimbaOp.ADD, kalimba_maxim_decode_binop_bank1_a_addsub),
     (0b111001_11_00000000_00000000_00000000, 0b000_001_00_00000000_00000000_00000000, KalimbaOp.ADC, kalimba_maxim_decode_binop_bank1_a_addsub),
     (0b111001_11_00000000_00000000_00000000, 0b001_000_00_00000000_00000000_00000000, KalimbaOp.SUB, kalimba_maxim_decode_binop_bank1_a_addsub),
@@ -1257,7 +1291,7 @@ maxim_ops_lut: List[Union[Tuple[int, int, KalimbaOp, Callable[[int, KalimbaOp, O
     (0b111111_11_00001100_00000000_00000000, 0b111_100_00_00001100_00000000_00000000, KalimbaOp.STORES, kalimba_maxim_decode_stack_a),
     #(0b111111_11_00000000_00000000_00000000, 0b111_110_00_00000000_00000000_00000000, KalimbaOp.UNUSED),
 
-    # Type B
+    # B
     (0b111001_11_00000000_00000000_00000000, 0b000_000_01_00000000_00000000_00000000, KalimbaOp.ADD, kalimba_maxim_decode_binop_bank1_b_addsub),
     (0b111001_11_00000000_00000000_00000000, 0b000_001_01_00000000_00000000_00000000, KalimbaOp.ADC, kalimba_maxim_decode_binop_bank1_b_addsub),
     (0b111001_11_00000000_00000000_00000000, 0b001_000_01_00000000_00000000_00000000, KalimbaOp.SUB, kalimba_maxim_decode_binop_bank1_b_addsub),
@@ -1291,7 +1325,7 @@ maxim_ops_lut: List[Union[Tuple[int, int, KalimbaOp, Callable[[int, KalimbaOp, O
     (0b111111_11_00001100_00000000_00000000, 0b111_100_01_00001000_00000000_00000000, KalimbaOp.LOADS,  kalimba_maxim_decode_stack_b),
     (0b111111_11_00001100_00000000_00000000, 0b111_100_01_00001100_00000000_00000000, KalimbaOp.STORES, kalimba_maxim_decode_stack_b),
 
-    # Type C
+    # C
     (0b111001_11_00000000_00000000_00000000, 0b000_000_10_00000000_00000000_00000000, KalimbaOp.ADD, kalimba_maxim_decode_binop_bank1_creg_addsub),
     (0b111001_11_00000000_00000000_00000000, 0b000_001_10_00000000_00000000_00000000, KalimbaOp.ADC, kalimba_maxim_decode_binop_bank1_creg_addsub),
     (0b111001_11_00000000_00000000_00000000, 0b001_000_10_00000000_00000000_00000000, KalimbaOp.SUB, kalimba_maxim_decode_binop_bank1_creg_addsub),
@@ -1406,7 +1440,8 @@ def test():
         except ValueError as e: # pragma: no cover
             print(f'UNSUPPORTED: failed to decode "{data.hex()}" ("{asm}"): {e}')
         except Exception as e: # pragma: no cover
-            print(f'ERROR: failed to decode "0b{int.from_bytes(data[:4], 'little'):032b}" ("{asm}")')
+            int32 = int.from_bytes(data[:4], 'little')
+            print(f'ERROR: failed to decode "0b{int32:032b}" ("{asm}")')
             print(f'                        "{data.hex()}" ("{asm}")')
             raise e
 

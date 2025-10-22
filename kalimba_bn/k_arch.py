@@ -7,8 +7,12 @@ from binaryninja.enums import InstructionTextTokenType,FlagRole,BranchType,LowLe
 
 from binaryninja.log import log_info
 
-from k_instr_new import *
-from k_minim import kalimba_maxim_decode
+try:
+    from k_instr_new import *
+    from k_minim import kalimba_maxim_decode
+except ImportError:
+    from .k_instr_new import *
+    from .k_minim import kalimba_maxim_decode
 
 class KALIMBA(Architecture):
     name = 'KALIMBA'
@@ -165,10 +169,12 @@ class KALIMBA(Architecture):
     def get_instruction_text(self, data: bytes, addr: int) -> Optional[Tuple[List[InstructionTextToken], int]]:
         dec_len, dec_data = kalimba_maxim_decode(data, addr)
         ops = []
-        ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, dec_data.__str__()))
+        if dec_data:
+            ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, dec_data.__str__()))
         return ops, dec_len
 
     def get_instruction_low_level_il(self, data: bytes, addr: int, il: LowLevelILFunction) -> Optional[int]:
         dec_len, dec_data = kalimba_maxim_decode(data, addr)
-        dec_data.llil(il)
+        if dec_data:
+            dec_data.llil(il, addr, dec_len)
         return dec_len

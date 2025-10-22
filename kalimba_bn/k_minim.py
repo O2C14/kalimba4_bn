@@ -1,5 +1,10 @@
 from struct import unpack
-from k_instr_new import *
+
+try:
+    from k_instr_new import *
+except ImportError:
+    from .k_instr_new import *
+
 from binaryninja.architecture import Architecture
 from binaryninja.function import Function
 from binaryninja import load
@@ -630,6 +635,7 @@ def kalimba_maxim_decode(data: bytes, addr: int):
         for mask, value, op, func in minim_prefixed_instructions:
             if (instruction & mask) == value:
                 return offset, func(instruction, op, prefixes)
+    return 0, None
 
 if __name__ == '__main__':
     print("\033c", end="")
@@ -638,8 +644,8 @@ if __name__ == '__main__':
     
     with open('flash_image.xuv_apps_p1.bin', 'rb') as f:
         f.seek(0x180)
-        #data = f.read(0xcbf4 - 0x180)
-        data = f.read(0x20)
+        data = f.read(0xcbf4 - 0x180)
+        #data = f.read(0x40)
         length = 0
         #bv = load(data, options={'loader.platform' : 'KALIMBA'})
         #bv.add_function(0)
@@ -653,16 +659,18 @@ if __name__ == '__main__':
             
             if inc == 0:
                 break
+            #Arch.get_instruction_info(data[length:], addr)
+            
             '''
             asm_str = dec_data.__str__()
             if isinstance(dec_data, KalimbaControlFlow) and 'do' in asm_str and inc == 2:
                 print(hex(addr), asm_str)
-            '''
+            
             llil.set_current_address(addr, Arch)
             dec_data.llil(llil, addr, inc)
-
+            '''
             length += inc
-
+            
 
         #mlil = MediumLevelILFunction(Arch, low_level_il=llil)
         #mlil.generate_ssa_form()
