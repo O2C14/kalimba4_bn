@@ -1,6 +1,8 @@
 from struct import unpack
 from k_instr_new import *
-
+from binaryninja.architecture import Architecture
+from binaryninja.function import Function
+from binaryninja import load
 cond_3bit_map_to_4bit = [0, 1, 3, 10, 11, 12, 13, 15]
 
 pushm_reg_bitmap = [
@@ -630,16 +632,40 @@ def kalimba_maxim_decode(data: bytes, addr: int):
                 return offset, func(instruction, op, prefixes)
 
 if __name__ == '__main__':
-    import os
-    os.system('clear')
+    print("\033c", end="")
+    import k_arch
+    Arch = k_arch.KALIMBA().register()
+    
     with open('flash_image.xuv_apps_p1.bin', 'rb') as f:
         f.seek(0x180)
-        data = f.read(0xcbf4 - 0x180)
+        #data = f.read(0xcbf4 - 0x180)
+        data = f.read(0x20)
         length = 0
+        #bv = load(data, options={'loader.platform' : 'KALIMBA'})
+        #bv.add_function(0)
+        #current_function = bv.functions[0]
+        #llil = LowLevelILFunction(Arch, source_func=current_function)
+        llil = LowLevelILFunction(Arch)
         while True:
+            
             addr = length + 0x180
             inc, dec_data = kalimba_maxim_decode(data[length:], addr)
+            
             if inc == 0:
                 break
-            print(hex(addr), dec_data.__str__())
+            '''
+            asm_str = dec_data.__str__()
+            if isinstance(dec_data, KalimbaControlFlow) and 'do' in asm_str and inc == 2:
+                print(hex(addr), asm_str)
+            '''
+            llil.set_current_address(addr, Arch)
+            dec_data.llil(llil, addr, inc)
+
             length += inc
+
+
+        #mlil = MediumLevelILFunction(Arch, low_level_il=llil)
+        #mlil.generate_ssa_form()
+        #print(mlil.__len__())
+        for i in range(llil.__len__()):
+            print(i, hex(llil[i].address), llil[i])

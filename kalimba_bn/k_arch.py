@@ -80,17 +80,17 @@ class KALIMBA(Architecture):
     }
     #Actually used
     flags = [
-        KalimbaFlags.Z_FLAG.name,
-        KalimbaFlags.C_FLAG.name,
-        KalimbaFlags.N_FLAG.name,
-        KalimbaFlags.V_FLAG.name,
-        KalimbaFlags.UD_FLAG.name
+        KalimbaFlags.Z.name,
+        KalimbaFlags.C.name,
+        KalimbaFlags.N.name,
+        KalimbaFlags.V.name,
+        KalimbaFlags.UD.name
     ]
     flag_roles = {
-        KalimbaFlags.Z_FLAG.name: FlagRole.ZeroFlagRole,
-        KalimbaFlags.C_FLAG.name: FlagRole.CarryFlagRole,
-        KalimbaFlags.N_FLAG.name: FlagRole.SpecialFlagRole,
-        KalimbaFlags.V_FLAG.name: FlagRole.OverflowFlagRole,
+        KalimbaFlags.Z.name: FlagRole.ZeroFlagRole,
+        KalimbaFlags.C.name: FlagRole.CarryFlagRole,
+        KalimbaFlags.N.name: FlagRole.SpecialFlagRole,
+        KalimbaFlags.V.name: FlagRole.OverflowFlagRole,
     }
 
     flag_write_types = [
@@ -99,20 +99,20 @@ class KALIMBA(Architecture):
 
     flags_written_by_flag_write_type = {
         '*' : [
-            KalimbaFlags.Z_FLAG.name,
-            KalimbaFlags.C_FLAG.name,
-            KalimbaFlags.N_FLAG.name,
-            KalimbaFlags.V_FLAG.name
+            KalimbaFlags.Z.name,
+            KalimbaFlags.C.name,
+            KalimbaFlags.N.name,
+            KalimbaFlags.V.name
         ],
         'zn' : [
-            KalimbaFlags.Z_FLAG.name,
-            KalimbaFlags.N_FLAG.name,
+            KalimbaFlags.Z.name,
+            KalimbaFlags.N.name,
         ]
 	}
     '''
     flags_required_for_flag_condition = {
-        LowLevelILFlagCondition.LLFC_E: [KalimbaFlags.Z_FLAG.name], 
-        LowLevelILFlagCondition.LLFC_NE: [KalimbaFlags.Z_FLAG.name],
+        LowLevelILFlagCondition.LLFC_E: [KalimbaFlags.Z.name], 
+        LowLevelILFlagCondition.LLFC_NE: [KalimbaFlags.Z.name],
 	}
     '''
     stack_pointer = 'SP'

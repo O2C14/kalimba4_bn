@@ -3,6 +3,11 @@ from typing import Callable, List, Type, Optional, Dict, Tuple, NewType, Union, 
 from dataclasses import dataclass
 from functools import partial
 from decimal import Decimal, getcontext
+from binaryninja.architecture import Architecture, InstructionInfo, RegisterInfo
+from binaryninja.lowlevelil import LowLevelILLabel, LLIL_TEMP, ExpressionIndex, LowLevelILFunction, ILRegisterType, LowLevelILConst, LowLevelILInstruction
+from binaryninja.mediumlevelil import MediumLevelILFunction
+from binaryninja.function import InstructionTextToken
+from binaryninja.enums import InstructionTextTokenType,FlagRole,BranchType,LowLevelILFlagCondition
 
 getcontext().prec = 29
 
@@ -84,6 +89,8 @@ class KalimbaWordMem:
     addr: Union[KalimbaReg, int]
     def __str__(self):
         return f'M[{self.addr}]'
+    def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        return
 
 @dataclass(unsafe_hash=True)
 class KalimbaIndexedMemAccess:
@@ -100,6 +107,8 @@ class KalimbaIndexedMemAccess:
             return f'{m} = {self.reg}'
         else:
             return f'{self.reg} = {m}'
+    def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        return
 
 reg_bank_lut = {
     1: KalimbaBank1Reg,
@@ -124,6 +133,44 @@ class KalimbaCond(IntEnum):
     LE      = 0b1101
     USERDEF = 0b1110
     Always  = 0b1111
+
+class KalimbaFlags(IntEnum):
+    INT_UM = auto()
+    INT_BR = auto()
+    INT_SV = auto()
+    INT_UD = auto()
+    INT_V  = auto()
+    INT_C  = auto()
+    INT_Z  = auto()
+    INT_N  = auto()
+    UM     = auto()
+    BR     = auto()
+    SV     = auto()
+    UD     = auto()
+    V      = auto()
+    C      = auto()
+    Z      = auto()
+    N      = auto()
+
+def cond_to_flags(cond: KalimbaCond, il: LowLevelILFunction):
+    dic = {
+        KalimbaCond.Z      : lambda il :il.flag(KalimbaFlags.Z.name),
+        KalimbaCond.NZ     : lambda il :il.not_expr(0, il.flag(KalimbaFlags.Z.name)),
+        KalimbaCond.C      : lambda il :il.flag(KalimbaFlags.C.name),
+        KalimbaCond.NC     : lambda il :il.not_expr(0, il.flag(KalimbaFlags.C.name)),
+        KalimbaCond.NEG    : lambda il :il.flag(KalimbaFlags.N.name),
+        KalimbaCond.POS    : lambda il :il.not_expr(0, il.flag(KalimbaFlags.N.name)),
+        KalimbaCond.V      : lambda il :il.flag(KalimbaFlags.V.name),
+        KalimbaCond.NV     : lambda il :il.not_expr(0, il.flag(KalimbaFlags.V.name)),
+        KalimbaCond.HI     : lambda il :il.and_expr(0, il.flag(KalimbaFlags.C.name), il.not_expr(0, il.flag(KalimbaFlags.Z.name))),
+        KalimbaCond.LS     : lambda il :il.or_expr(0, il.not_expr(0, il.flag(KalimbaFlags.C.name)), il.flag(KalimbaFlags.Z.name)),
+        KalimbaCond.GE     : lambda il :il.compare_equal(0, il.flag(KalimbaFlags.N.name), il.flag(KalimbaFlags.V.name)),
+        KalimbaCond.LT     : lambda il :il.compare_not_equal(0, il.flag(KalimbaFlags.N.name), il.flag(KalimbaFlags.V.name)),
+        KalimbaCond.GT     : lambda il :il.and_expr(0, il.not_expr(0, il.flag(KalimbaFlags.Z.name)), il.compare_equal(0, il.flag(KalimbaFlags.N.name), il.flag(KalimbaFlags.V.name))),
+        KalimbaCond.LE     : lambda il :il.or_expr(0, il.flag(KalimbaFlags.Z.name), il.compare_not_equal(0, il.flag(KalimbaFlags.N.name), il.flag(KalimbaFlags.V.name))),
+        KalimbaCond.USERDEF: lambda il :il.flag(KalimbaFlags.UD.name),
+    }
+    return dic[cond](il)
 
 class KalimbaInstrType(IntEnum):
     A = 0 # <if cond> RegC = RegA OP RegB <MEM_ACCESS_1>
@@ -177,6 +224,7 @@ class KalimbaOp(IntEnum):
     PREFIX = auto() # 32-bit constant prefix
     UNUSED = auto() # Reserved
     INSERT32 = auto() # MaxiM instruction encoded with MiniM insert32
+
 unop_symbols = {
     KalimbaOp.SIGN:  'SIGNDET',
     KalimbaOp.BSIGN: 'BLKSIGNDET',
@@ -213,6 +261,8 @@ class KalimbaUnOp:
             return f'KalimbaUnOp("{self.c} = {op} {self.a}{m1}{m2}")'
         else:
             return f'KalimbaUnOp("if {self.cond.name} {self.c} = {op} {self.a}{m1}{m2}")'
+    def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        return
 
 binop_symbols = {
     KalimbaOp.ADD:  ('+', ''),
@@ -277,6 +327,8 @@ class KalimbaBinOp:
         if self.op == KalimbaOp.FMUL and isinstance(self.b, int):
             b = format(Decimal(self.b) / 2**31, '.48g')
         return f'KalimbaBinOp("{cond}{c if self.c != KalimbaBank3Reg.DivResult else 'Div'} = {self.a} {op} {b}{extra}{m1}{m2}")'
+    def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        return
 
 def get_mask(length):
     return (1 << length) - 1
@@ -836,6 +888,8 @@ class KalimbaOffsetMemAccess:
             return f'KalimbaOffsetMemAccess("{cond}M[{self.a} + {self.b}] = {self.c}{m1}{m2}")'
         else:
             raise ValueError(f'invalid mem op: {self.op}') # pragma: no cover
+    def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        return
 
 def kalimba_maxim_decode_load_store_a(instruction, op, prefix):
     (cond, mem, rega, regb, regc) = kalimba_maxim_decode_a(instruction)
@@ -876,6 +930,32 @@ class KalimbaControlFlow:
             t = f' {self.a & -2}'
 
         return f'KalimbaControlFlow("{cond}{n}{t}{m}")'
+    def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        t = None
+        if isinstance(self.a, int):
+            t = il.get_label_for_address(Architecture['KALIMBA'], self.a + addr)
+        if t is None:
+            t = LowLevelILLabel()
+            indirect = True
+        else:
+            indirect = False
+        f = LowLevelILLabel()
+        il.append(il.if_expr(cond_to_flags(self.cond, il), t, f))
+        if indirect:
+            il.mark_label(t)
+
+        if isinstance(self.a, int):
+            dest = il.const(4, self.a + addr)
+        else:
+            dest = il.reg(self.a.name)
+
+        if KalimbaOp.JUMP:
+            il.append(il.jump(dest))
+        elif KalimbaOp.CALL:
+            il.append(il.call(dest))
+        
+        il.mark_label(f)
+        return
 
 def kalimba_maxim_decode_flow_a(instruction, op, prefix):
     (cond, mem, rega, regb, _) = kalimba_maxim_decode_a(instruction)
@@ -941,6 +1021,8 @@ class KalimbaStackOp:
                 return f'KalimbaStackOp("{cond}SP = SP - {self.adj}, {self.op.name.lower()} {reg}{m1}{m2}")'
         else:
             return f'KalimbaStackOp("{cond}{self.op.name.lower()} {reg}{m1}{m2}")'
+    def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        return
 
 def kalimba_maxim_decode_stack_a(instruction, op, prefix):
     bankc = reg_bank_lut[get_bits(instruction, 16, 2) + 1]
@@ -1053,6 +1135,30 @@ class KalimbaSubWordMemAccess:
             return f'KalimbaSubWordMemAccess("{cond}{m}[{self.a} {op} {self.b}] = {self.c}")'
         else:
             raise ValueError(f'invalid mem op: {self.op}') # pragma: no cover
+    def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        if isinstance(self.b, int):
+            il_regb_k = il.const(4,self.b)
+        else:
+            il_regb_k = il.reg(4, self.b.name)
+        if self.a != KalimbaBank1Reg.Null:
+            addr = il.add(4, il.reg(4, self.a.name), il_regb_k)
+        else:
+            addr = il_regb_k
+        if self.sel in [KalimbaSubWordMem.L_MBS, KalimbaSubWordMem.L_MBU]:
+            expr = il.set_reg(4, self.c.name, il.load(1, addr), flags='zn')
+        if self.sel in [KalimbaSubWordMem.L_MHS, KalimbaSubWordMem.L_MHU]:
+            expr = il.set_reg(4, self.c.name, il.load(2, addr), flags='zn')
+        if self.sel == KalimbaSubWordMem.L_M:
+            expr = il.set_reg(4, self.c.name, il.load(4, addr), flags='zn')
+        if self.sel == KalimbaSubWordMem.S_MB:
+            expr = il.store(1, addr, il.reg(4, self.c.name), flags='zn')
+        if self.sel == KalimbaSubWordMem.S_MH:
+            expr = il.store(2, addr, il.reg(4, self.c.name), flags='zn')
+        if self.sel == KalimbaSubWordMem.S_M:
+            expr = il.store(4, addr, il.reg(4, self.c.name), flags='zn')
+
+        il.append(expr)
+        return
 
 bank_bit_lut = [KalimbaBank1Reg, KalimbaBank2Reg]
 
