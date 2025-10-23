@@ -9,10 +9,10 @@ from binaryninja.log import log_info
 
 try:
     from k_instr_new import *
-    from k_minim import kalimba_maxim_decode
+    from k_minim import kalimba_minim_decode
 except ImportError:
     from .k_instr_new import *
-    from .k_minim import kalimba_maxim_decode
+    from .k_minim import kalimba_minim_decode
 
 class KALIMBA(Architecture):
     name = 'KALIMBA'
@@ -125,7 +125,7 @@ class KALIMBA(Architecture):
     
     def get_instruction_info(self, data:bytes, addr:int) -> Optional[InstructionInfo]:
         result = InstructionInfo()
-        dec_len, dec_data = kalimba_maxim_decode(data, addr)
+        dec_len, dec_data = kalimba_minim_decode(data, addr)
         result.length = dec_len
         if not isinstance(dec_data, KalimbaControlFlow):
             return result
@@ -135,30 +135,30 @@ class KALIMBA(Architecture):
                 result.add_branch(BranchType.FunctionReturn)
             elif dec_data.op == KalimbaOp.JUMP:
                 if isinstance(dec_data.a, int):
-                    result.add_branch(BranchType.UnconditionalBranch, dec_data.a + addr)
+                    result.add_branch(BranchType.UnconditionalBranch, (dec_data.a & -2) + addr)
                 else:
                     result.add_branch(BranchType.IndirectBranch)
             elif dec_data.op == KalimbaOp.CALL:
                 if isinstance(dec_data.a, int):
-                    result.add_branch(BranchType.CallDestination, dec_data.a + addr)
+                    result.add_branch(BranchType.CallDestination, (dec_data.a & -2) + addr)
                 else:
                     result.add_branch(BranchType.IndirectBranch)
         if dec_data.cond != KalimbaCond.Always:
             if dec_data.op == KalimbaOp.JUMP:
                 if isinstance(dec_data.a, int):
-                    result.add_branch(BranchType.TrueBranch, dec_data.a + addr)
+                    result.add_branch(BranchType.TrueBranch, (dec_data.a & -2) + addr)
                     result.add_branch(BranchType.FalseBranch, addr + dec_len)
                 else:
                     result.add_branch(BranchType.IndirectBranch)
             elif dec_data.op == KalimbaOp.CALL:
                 if isinstance(dec_data.a, int):# no 'TrueCallDestination'
-                    result.add_branch(BranchType.CallDestination, dec_data.a + addr)
+                    result.add_branch(BranchType.CallDestination, (dec_data.a & -2) + addr)
                     result.add_branch(BranchType.FalseBranch, addr + dec_len)
                 else:
                     result.add_branch(BranchType.IndirectBranch)
             elif dec_data.op == KalimbaOp.DOLOOP:
                 if isinstance(dec_data.a, int):
-                    result.add_branch(BranchType.FalseBranch, dec_data.a + addr)
+                    result.add_branch(BranchType.FalseBranch, (dec_data.a & -2) + addr)
                     result.add_branch(BranchType.TrueBranch, addr + dec_len)
                 # TODO jump back
         return result
@@ -167,14 +167,14 @@ class KALIMBA(Architecture):
         return InstructionTextToken(InstructionTextTokenType.TextToken, f'{s} ')
 
     def get_instruction_text(self, data: bytes, addr: int) -> Optional[Tuple[List[InstructionTextToken], int]]:
-        dec_len, dec_data = kalimba_maxim_decode(data, addr)
+        dec_len, dec_data = kalimba_minim_decode(data, addr)
         ops = []
         if dec_data:
             ops.append(InstructionTextToken(InstructionTextTokenType.TextToken, dec_data.__str__()))
         return ops, dec_len
 
     def get_instruction_low_level_il(self, data: bytes, addr: int, il: LowLevelILFunction) -> Optional[int]:
-        dec_len, dec_data = kalimba_maxim_decode(data, addr)
+        dec_len, dec_data = kalimba_minim_decode(data, addr)
         if dec_data:
             dec_data.llil(il, addr, dec_len)
         return dec_len

@@ -126,7 +126,7 @@ def kalimba_minim_decode_pushm_popm(instruction, op):
             reg_list.append(KalimbaBank1Reg(i))
     if rLink == 1:
         reg_list.append(KalimbaBank1Reg.rLink)
-    return KalimbaStackOp(op, reg_list, KalimbaCond.Always, adj=adj)
+    return KalimbaStackOp(op, reg_list, KalimbaCond.Always, adj, None, None, True)
 
 
 def kalimba_minim_decode_call_jump_regc(instruction, op):
@@ -139,13 +139,13 @@ def kalimba_minim_decode_call_jump_regc(instruction, op):
 def kalimba_minim_decode_call_jump_do_k(instruction, op):
     cond = KalimbaCond.Always
     if op == KalimbaOp.CALL:
-        K = nbits_unsigned_to_signed(instruction & 0xff, 9)
+        K = nbits_unsigned_to_signed(instruction & 0x1FF, 9)
     elif op == KalimbaOp.JUMP:
-        K = nbits_unsigned_to_signed(instruction & 0xff, 9)
+        K = nbits_unsigned_to_signed(instruction & 0x1FF, 9)
         cond = KalimbaCond(cond_3bit_map_to_4bit[get_bits(instruction, 9, 3)])
     elif op == KalimbaOp.DOLOOP:
         K = instruction & 0x3f
-    return KalimbaControlFlow(op, K * 2 + 1, cond, None) #TODO do (m)
+    return KalimbaControlFlow(op, K * 2 | 1, cond, None) #TODO do (m)
 
 
 def kalimba_minim_decode_sp_adjust(instruction, op):
@@ -515,7 +515,7 @@ def kalimba_minim_decode_prefixed_pushm_popm(instruction, op, prefixes):
         if ((bitfield >> i) & 1) == 1:
             reg_list.append(bank_sel(i))
 
-    return KalimbaStackOp(op, reg_list, KalimbaCond.Always, sp_adjust)
+    return KalimbaStackOp(op, reg_list, KalimbaCond.Always, sp_adjust, None, None, True)
 
 
 def kalimba_minim_decode_prefixed_doloop(instruction, op, prefixes):
@@ -610,7 +610,7 @@ minim_prefixed_instructions = [
 ]
 
 
-def kalimba_maxim_decode(data: bytes, addr: int):
+def kalimba_minim_decode(data: bytes, addr: int):
     prefixes = []
     offset = 0
     if len(data) < 2:
@@ -643,9 +643,10 @@ if __name__ == '__main__':
     Arch = k_arch.KALIMBA().register()
     
     with open('flash_image.xuv_apps_p1.bin', 'rb') as f:
-        f.seek(0x180)
-        data = f.read(0xcbf4 - 0x180)
-        #data = f.read(0x40)
+        offset = 0xc61e
+        f.seek(offset)
+        #data = f.read(0xcbf4 - offset)
+        data = f.read(0x80)
         length = 0
         #bv = load(data, options={'loader.platform' : 'KALIMBA'})
         #bv.add_function(0)
@@ -654,8 +655,8 @@ if __name__ == '__main__':
         llil = LowLevelILFunction(Arch)
         while True:
             
-            addr = length + 0x180
-            inc, dec_data = kalimba_maxim_decode(data[length:], addr)
+            addr = length + offset
+            inc, dec_data = kalimba_minim_decode(data[length:], addr)
             
             if inc == 0:
                 break
@@ -665,10 +666,10 @@ if __name__ == '__main__':
             asm_str = dec_data.__str__()
             if isinstance(dec_data, KalimbaControlFlow) and 'do' in asm_str and inc == 2:
                 print(hex(addr), asm_str)
-            
+            '''
             llil.set_current_address(addr, Arch)
             dec_data.llil(llil, addr, inc)
-            '''
+            
             length += inc
             
 
