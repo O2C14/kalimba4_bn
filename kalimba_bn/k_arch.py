@@ -138,11 +138,17 @@ class KALIMBA(Architecture):
     stack_pointer = 'SP'
     link_reg = 'rLink'
     minim_offset = 0#0x180
-    
+    _doloop_dic_ : Dict[int, int] =  {} #loop end addr, length
     def get_instruction_info(self, data:bytes, addr:int) -> Optional[InstructionInfo]:
         result = InstructionInfo()
         dec_len, dec_data = kalimba_minim_decode(data, addr)
         result.length = dec_len
+
+        if (addr + dec_len) in self._doloop_dic_:
+            loop_length = self._doloop_dic_[addr + dec_len]
+            result.add_branch(BranchType.TrueBranch, addr - (loop_length - dec_len))
+            result.add_branch(BranchType.FalseBranch, addr + dec_len)
+
         if not isinstance(dec_data, KalimbaControlFlow):
             return result
         
@@ -159,6 +165,10 @@ class KALIMBA(Architecture):
                     result.add_branch(BranchType.CallDestination, (dec_data.a & -2) + addr)
                 else:
                     result.add_branch(BranchType.IndirectBranch)
+            elif dec_data.op == KalimbaOp.DOLOOP:
+                if isinstance(dec_data.a, int):
+                    self._doloop_dic_[(dec_data.a & -2) + addr] = (dec_data.a & -2) - dec_len
+
         if dec_data.cond != KalimbaCond.Always:
             if dec_data.op == KalimbaOp.JUMP:
                 if isinstance(dec_data.a, int):
@@ -172,11 +182,7 @@ class KALIMBA(Architecture):
                     result.add_branch(BranchType.FalseBranch, addr + dec_len)
                 else:
                     result.add_branch(BranchType.IndirectBranch)
-            elif dec_data.op == KalimbaOp.DOLOOP:
-                if isinstance(dec_data.a, int):
-                    result.add_branch(BranchType.FalseBranch, (dec_data.a & -2) + addr)
-                    result.add_branch(BranchType.TrueBranch, addr + dec_len)
-                # TODO jump back
+
         return result
 
     def _padding(self, s=''):
@@ -191,6 +197,20 @@ class KALIMBA(Architecture):
 
     def get_instruction_low_level_il(self, data: bytes, addr: int, il: LowLevelILFunction) -> Optional[int]:
         dec_len, dec_data = kalimba_minim_decode(data, addr)
-        if dec_data:
+
+        if dec_data:       
+            if dec_data.op == KalimbaOp.DOLOOP:
+                if isinstance(dec_data.a, int):
+                    self._doloop_dic_[(dec_data.a & -2) + addr] = (dec_data.a & -2) - dec_len
             dec_data.llil(il, addr, dec_len)
+            if (addr + dec_len) in self._doloop_dic_:
+                loop_length = self._doloop_dic_[addr + dec_len]
+                f = LowLevelILLabel()
+                t = LowLevelILLabel()
+                il.append(il.if_expr(il.compare_not_equal(4, il.reg(4, KalimbaBank1Reg.r10.name), il.const(4, 0)), t, f))
+                il.mark_label(t)
+                il.append(il.set_reg(4, KalimbaBank1Reg.r10.name, il.sub(4, il.reg(4, KalimbaBank1Reg.r10.name), il.const(4, 1))))
+                il.append(il.jump(il.const(4, addr - (loop_length - dec_len))))
+                il.mark_label(f)
+
         return dec_len
