@@ -392,32 +392,32 @@ class KalimbaBinOp:
         elif self.op == KalimbaOp.LSHIFT:
             t = LowLevelILLabel()
             f = LowLevelILLabel()
-            exit_lable = LowLevelILLabel()
+            exit_label = LowLevelILLabel()
             il.append(il.if_expr(il.compare_signed_less_than(4, src_op_to_expr(il, self.b), il.const(0, 0)), t, f))
 
             il.mark_label(t)
             value_expr = il.logical_shift_right(4, src_op_to_expr(il, self.a), il.neg_expr(4, src_op_to_expr(il, self.b)), flags='znvc')
             dst_op_to_expr(il, self.c, value_expr)
-            il.append(il.goto(exit_lable))
+            il.append(il.goto(exit_label))
             il.mark_label(f)
             value_expr = il.shift_left(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
             dst_op_to_expr(il, self.c, value_expr)
-            il.mark_label(exit_lable)
+            il.mark_label(exit_label)
             return
         elif self.op == KalimbaOp.ASHIFT:
             t = LowLevelILLabel()
             f = LowLevelILLabel()
-            exit_lable = LowLevelILLabel()
+            exit_label = LowLevelILLabel()
             il.append(il.if_expr(il.compare_signed_less_than(4, src_op_to_expr(il, self.b), il.const(0, 0)), t, f))
             
             il.mark_label(t)
             value_expr = il.arith_shift_right(4, src_op_to_expr(il, self.a), il.neg_expr(4, src_op_to_expr(il, self.b)), flags='znvc')
             dst_op_to_expr(il, self.c, value_expr)
-            il.append(il.goto(exit_lable))
+            il.append(il.goto(exit_label))
             il.mark_label(f)
             value_expr = il.shift_left(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
             dst_op_to_expr(il, self.c, value_expr)
-            il.mark_label(exit_lable)
+            il.mark_label(exit_label)
             return
         elif self.op == KalimbaOp.IMUL :
             value_expr = il.mult(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
