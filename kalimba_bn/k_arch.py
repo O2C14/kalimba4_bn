@@ -158,13 +158,9 @@ class KALIMBA(Architecture):
             elif dec_data.op == KalimbaOp.JUMP:
                 if isinstance(dec_data.a, int):
                     result.add_branch(BranchType.UnconditionalBranch, (dec_data.a & -2) + addr)
-                else:
-                    result.add_branch(BranchType.IndirectBranch)
             elif dec_data.op == KalimbaOp.CALL:
                 if isinstance(dec_data.a, int):
                     result.add_branch(BranchType.CallDestination, (dec_data.a & -2) + addr)
-                else:
-                    result.add_branch(BranchType.IndirectBranch)
             elif dec_data.op == KalimbaOp.DOLOOP:
                 if isinstance(dec_data.a, int):
                     self._doloop_dic_[(dec_data.a & -2) + addr] = (dec_data.a & -2) - dec_len
@@ -174,15 +170,10 @@ class KALIMBA(Architecture):
                 if isinstance(dec_data.a, int):
                     result.add_branch(BranchType.TrueBranch, (dec_data.a & -2) + addr)
                     result.add_branch(BranchType.FalseBranch, addr + dec_len)
-                else:
-                    result.add_branch(BranchType.IndirectBranch)
             elif dec_data.op == KalimbaOp.CALL:
                 if isinstance(dec_data.a, int):# no 'TrueCallDestination'
                     result.add_branch(BranchType.CallDestination, (dec_data.a & -2) + addr)
                     result.add_branch(BranchType.FalseBranch, addr + dec_len)
-                else:
-                    result.add_branch(BranchType.IndirectBranch)
-
         return result
 
     def _padding(self, s=''):

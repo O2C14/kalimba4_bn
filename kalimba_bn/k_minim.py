@@ -452,7 +452,7 @@ def kalimba_minim_decode_prefixed_jump(instruction, op, prefixes):
 
     if sign_extended:
         K = nbits_unsigned_to_signed(K, total_len)
-    cond = KalimbaCond(get_bits(instruction, 0, 4))
+    cond = KalimbaCond(get_bits(prefixes[-1], 0, 4))
     return KalimbaControlFlow(op, K, cond, None)
 
 
