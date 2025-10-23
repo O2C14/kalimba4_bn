@@ -205,11 +205,11 @@ class KALIMBA(Architecture):
             dec_data.llil(il, addr, dec_len)
             if (addr + dec_len) in self._doloop_dic_:
                 loop_length = self._doloop_dic_[addr + dec_len]
+                il.append(il.set_reg(4, KalimbaBank1Reg.r10.name, il.sub(4, il.reg(4, KalimbaBank1Reg.r10.name), il.const(4, 1))))
                 f = LowLevelILLabel()
                 t = LowLevelILLabel()
                 il.append(il.if_expr(il.compare_not_equal(4, il.reg(4, KalimbaBank1Reg.r10.name), il.const(4, 0)), t, f))
                 il.mark_label(t)
-                il.append(il.set_reg(4, KalimbaBank1Reg.r10.name, il.sub(4, il.reg(4, KalimbaBank1Reg.r10.name), il.const(4, 1))))
                 il.append(il.jump(il.const(4, addr - (loop_length - dec_len))))
                 il.mark_label(f)
 

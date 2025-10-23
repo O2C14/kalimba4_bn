@@ -1049,6 +1049,13 @@ class KalimbaControlFlow:
                 il.append(il.call(dest))
             elif self.op == KalimbaOp.RTS:
                 il.append(il.jump(il.reg(4, KalimbaBank1Reg.rLink.name)))
+            elif self.op == KalimbaOp.DOLOOP:
+                f = LowLevelILLabel()
+                t = LowLevelILLabel()
+                il.append(il.if_expr(il.compare_equal(4, il.reg(4, KalimbaBank1Reg.r10.name), il.const(4, 0)), t, f))
+                il.mark_label(t)
+                il.append(il.jump(il.const(4, (self.a & -2) + addr)))
+                il.mark_label(f)
         else:
             t = LowLevelILLabel()
             f = LowLevelILLabel()
