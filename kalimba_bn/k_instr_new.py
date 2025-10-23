@@ -89,8 +89,6 @@ class KalimbaWordMem:
     addr: Union[KalimbaReg, int]
     def __str__(self):
         return f'M[{self.addr}]'
-    def llil(self, il: LowLevelILFunction, addr: int, length: int):
-        return
 
 @dataclass(unsafe_hash=True)
 class KalimbaIndexedMemAccess:
@@ -152,6 +150,7 @@ class KalimbaFlags(IntEnum):
     Z      = auto()
     N      = auto()
 
+'''
 def cond_to_flags(cond: KalimbaCond, il: LowLevelILFunction):
     dic = {
         KalimbaCond.Z      : lambda il :il.flag(KalimbaFlags.Z.name),
@@ -168,6 +167,27 @@ def cond_to_flags(cond: KalimbaCond, il: LowLevelILFunction):
         KalimbaCond.LT     : lambda il :il.compare_not_equal(0, il.flag(KalimbaFlags.N.name), il.flag(KalimbaFlags.V.name)),
         KalimbaCond.GT     : lambda il :il.and_expr(0, il.not_expr(0, il.flag(KalimbaFlags.Z.name)), il.compare_equal(0, il.flag(KalimbaFlags.N.name), il.flag(KalimbaFlags.V.name))),
         KalimbaCond.LE     : lambda il :il.or_expr(0, il.flag(KalimbaFlags.Z.name), il.compare_not_equal(0, il.flag(KalimbaFlags.N.name), il.flag(KalimbaFlags.V.name))),
+        KalimbaCond.USERDEF: lambda il :il.flag(KalimbaFlags.UD.name),
+    }
+    return dic[cond](il)
+'''
+
+def cond_to_flags(cond: KalimbaCond, il: LowLevelILFunction):
+    dic = {
+        KalimbaCond.Z      : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_E),
+        KalimbaCond.NZ     : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_E),
+        KalimbaCond.C      : lambda il :il.flag(KalimbaFlags.C.name),
+        KalimbaCond.NC     : lambda il :il.not_expr(0, il.flag(KalimbaFlags.C.name)),
+        KalimbaCond.NEG    : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_NEG),
+        KalimbaCond.POS    : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_POS),
+        KalimbaCond.V      : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_O),
+        KalimbaCond.NV     : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_NO),
+        KalimbaCond.HI     : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_UGT),
+        KalimbaCond.LS     : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_ULE),
+        KalimbaCond.GE     : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_SGE),
+        KalimbaCond.LT     : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_SLT),
+        KalimbaCond.GT     : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_SGT),
+        KalimbaCond.LE     : lambda il :il.flag_condition(LowLevelILFlagCondition.LLFC_SLE),
         KalimbaCond.USERDEF: lambda il :il.flag(KalimbaFlags.UD.name),
     }
     return dic[cond](il)
@@ -278,6 +298,30 @@ binop_symbols = {
 KalimbaDstOp = Union[KalimbaWordMem, KalimbaReg]
 KalimbaSrcOp = Union[KalimbaWordMem, KalimbaReg, int]
 
+def dst_op_to_expr(il: LowLevelILFunction, op:KalimbaDstOp, value_expr):
+    if value_expr:
+        if isinstance(op, KalimbaWordMem):
+            if isinstance(op.addr, int):
+                il.append(il.store(4, il.const(4, op.addr), value_expr))
+            else:
+                il.append(il.store(4, il.reg(4, op.addr.name), value_expr))
+        elif op != KalimbaBank1Reg.Null:
+            il.append(il.set_reg(4, op.name, value_expr))
+        else:
+            il.append(value_expr)
+
+def src_op_to_expr(il: LowLevelILFunction, op:KalimbaSrcOp):
+    if isinstance(op, KalimbaWordMem):
+        if isinstance(op.addr, int):
+            return il.load(4, il.const(4, op.addr))
+        else:
+            return il.load(4, il.reg(4, op.addr.name))
+    elif isinstance(op, int):
+        return il.const(4, op)
+    if op == KalimbaBank1Reg.Null:
+        return il.const(4, 0)
+    return il.reg(4, op.name)
+
 class KalimbaShiftType(IntEnum):
     ST_32 = 0
     ST_72 = auto()
@@ -328,7 +372,66 @@ class KalimbaBinOp:
             b = format(Decimal(self.b) / 2**31, '.48g')
         tmp = c if self.c != KalimbaBank3Reg.DivResult else 'Div'
         return f'KalimbaBinOp("{cond}{tmp} = {self.a} {op} {b}{extra}{m1}{m2}")'
+
     def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        value_expr = None
+        if self.op == KalimbaOp.ADD:
+            value_expr = il.add(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+        elif self.op == KalimbaOp.ADC:
+            value_expr = il.add_carry(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), il.flag(KalimbaCond.C), flags='znvc')
+        elif self.op == KalimbaOp.SUB:
+            value_expr = il.sub(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+        elif self.op == KalimbaOp.SBB:
+            value_expr = il.sub_borrow(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), il.not_expr(0, il.flag(KalimbaCond.C)), flags='znvc')
+        elif self.op == KalimbaOp.AND:
+            value_expr = il.and_expr(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+        elif self.op == KalimbaOp.OR:
+            value_expr = il.or_expr(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+        elif self.op == KalimbaOp.XOR:
+            value_expr = il.xor_expr(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+        elif self.op == KalimbaOp.LSHIFT:
+            t = LowLevelILLabel()
+            f = LowLevelILLabel()
+            exit_lable = LowLevelILLabel()
+            il.append(il.if_expr(il.compare_signed_less_than(4, src_op_to_expr(il, self.b), il.const(0, 0)), t, f))
+
+            il.mark_label(t)
+            value_expr = il.logical_shift_right(4, src_op_to_expr(il, self.a), il.neg_expr(4, src_op_to_expr(il, self.b)), flags='znvc')
+            dst_op_to_expr(il, self.c, value_expr)
+            il.append(il.goto(exit_lable))
+            il.mark_label(f)
+            value_expr = il.shift_left(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+            dst_op_to_expr(il, self.c, value_expr)
+            il.mark_label(exit_lable)
+            return
+        elif self.op == KalimbaOp.ASHIFT:
+            t = LowLevelILLabel()
+            f = LowLevelILLabel()
+            exit_lable = LowLevelILLabel()
+            il.append(il.if_expr(il.compare_signed_less_than(4, src_op_to_expr(il, self.b), il.const(0, 0)), t, f))
+            
+            il.mark_label(t)
+            value_expr = il.arith_shift_right(4, src_op_to_expr(il, self.a), il.neg_expr(4, src_op_to_expr(il, self.b)), flags='znvc')
+            dst_op_to_expr(il, self.c, value_expr)
+            il.append(il.goto(exit_lable))
+            il.mark_label(f)
+            value_expr = il.shift_left(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+            dst_op_to_expr(il, self.c, value_expr)
+            il.mark_label(exit_lable)
+            return
+        elif self.op == KalimbaOp.IMUL :
+            value_expr = il.mult(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+        elif self.op == KalimbaOp.SMUL :
+            value_expr = il.mult(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+        elif self.op == KalimbaOp.FMUL :
+            value_expr = il.float_mult(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+        elif self.op == KalimbaOp.FMADD:
+            value_expr = il.float_add(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+        elif self.op == KalimbaOp.FMSUB:
+            value_expr = il.float_sub(4, src_op_to_expr(il, self.a), src_op_to_expr(il, self.b), flags='znvc')
+        elif self.op == KalimbaOp.MULX :
+            pass
+        dst_op_to_expr(il, self.c, value_expr)
         return
 
 def get_mask(length):
@@ -934,32 +1037,34 @@ class KalimbaControlFlow:
 
         return f'KalimbaControlFlow("{cond}{n}{t}{m}")'
     def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        # TODO DOLOOP
         if self.cond == KalimbaCond.Always:
-            return
-        t = None
-        if isinstance(self.a, int):
-            t = il.get_label_for_address(Architecture['KALIMBA'], self.a + addr)
-        if t is None:
+            if isinstance(self.a, int):
+                dest = il.const(4, (self.a & -2) + addr)
+            else:
+                dest = il.reg(4, self.a.name)
+            if self.op == KalimbaOp.JUMP:
+                il.append(il.jump(dest))
+            elif self.op == KalimbaOp.CALL:
+                il.append(il.call(dest))
+            elif self.op == KalimbaOp.RTS:
+                il.append(il.jump(il.reg(4, KalimbaBank1Reg.rLink.name)))
+        else:
             t = LowLevelILLabel()
-            indirect = True
-        else:
-            indirect = False
-        f = LowLevelILLabel()
-        il.append(il.if_expr(cond_to_flags(self.cond, il), t, f))
-        if indirect:
+            f = LowLevelILLabel()
+            il.append(il.if_expr(cond_to_flags(self.cond, il), t, f))
             il.mark_label(t)
-
-        if isinstance(self.a, int):
-            dest = il.const(4, (self.a & -2) + addr)
-        else:
-            dest = il.reg(self.a.name)
-
-        if KalimbaOp.JUMP:
-            il.append(il.jump(dest))
-        elif KalimbaOp.CALL:
-            il.append(il.call(dest))
-        
-        il.mark_label(f)
+            if isinstance(self.a, int):
+                dest = il.const(4, (self.a & -2) + addr)
+            else:
+                dest = il.reg(4, self.a.name)
+            if self.op == KalimbaOp.JUMP:
+                il.append(il.jump(dest))
+            elif self.op == KalimbaOp.CALL:
+                il.append(il.call(dest))
+            elif self.op == KalimbaOp.RTS:
+                il.append(il.jump(il.reg(4, KalimbaBank1Reg.rLink.name)))
+            il.mark_label(f)
         return
 
 def kalimba_maxim_decode_flow_a(instruction, op, prefix):
@@ -1027,12 +1132,45 @@ class KalimbaStackOp:
         else:
             return f'KalimbaStackOp("{cond}{self.op.name.lower()} {reg}{m1}{m2}")'
     def llil(self, il: LowLevelILFunction, addr: int, length: int):
+        #TODO rMAC(B) size
+        '''
         if self.op in [KalimbaOp.PUSH, KalimbaOp.PUSHM]:
-            if KalimbaBank3Reg.FP in self.reg:
-                il.append(il.set_reg(4, il.reg(4, KalimbaBank3Reg.FP.name),il.reg(4, KalimbaBank3Reg.SP.name)))
-        for reg in self.reg:
-            il.append(il.push(4, il.reg(4, reg.name)))#TODO rMAC(B) size
+            for reg in self.reg:
+                il.append(il.push(4, il.reg(4, reg.name)))
+                if KalimbaBank3Reg.FP == reg and self.new_stack_frame:
+                    il.append(il.set_reg(4, KalimbaBank3Reg.FP.name, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, 4))))
+                il.append(il.set_reg(4, KalimbaBank3Reg.SP.name, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, 8))))
+            if self.adj and self.adj != 0:
+                il.append(il.set_reg(4, KalimbaBank3Reg.SP.name, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, self.adj))))
+        if self.op in [KalimbaOp.POP, KalimbaOp.POPM]:
+            if self.adj and self.adj != 0:
+                il.append(il.set_reg(4, KalimbaBank3Reg.SP.name, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, -self.adj))))
+            for reg in self.reg:
+                il.append(il.set_reg(4, reg.name, il.load(4, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, -4)))))
+                il.append(il.pop(4))
+                il.append(il.set_reg(4, KalimbaBank3Reg.SP.name, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, -8))))
+        '''
+        if self.op in [KalimbaOp.PUSH, KalimbaOp.PUSHM]:
+            il.append(il.set_reg(4, KalimbaBank3Reg.SP.name, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, 4 * len(self.reg)))))
+            push_index = len(self.reg)
+            for reg in self.reg:
+                il.append(il.store(4, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, -push_index * 4)), il.reg(4, reg.name)))
+                push_index -= 1
 
+            if self.adj and self.adj != 0:
+                il.append(il.set_reg(4, KalimbaBank3Reg.SP.name, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, self.adj))))
+        if self.op in [KalimbaOp.POP, KalimbaOp.POPM]:
+            if self.adj and self.adj != 0:
+                il.append(il.set_reg(4, KalimbaBank3Reg.SP.name, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, -self.adj))))
+            tmp_reg_list = self.reg
+            tmp_reg_list.reverse()
+            pop_index = 0
+            for reg in tmp_reg_list:
+                pop_index += 1
+                il.append(il.set_reg(4, reg.name, il.load(4, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, -pop_index * 4)))))
+
+            il.append(il.set_reg(4, KalimbaBank3Reg.SP.name, il.add(4, il.reg(4, KalimbaBank3Reg.SP.name), il.const(4, -4 * len(self.reg)))))
+            
         return
 
 def kalimba_maxim_decode_stack_a(instruction, op, prefix):
@@ -1187,7 +1325,7 @@ class KalimbaSubWordMemAccess:
             pass
         else:
             il.append(expr)
-
+        # Using flags='zn' in il.store will result in an error message
         il.append(il.set_flag(KalimbaFlags.Z.name, z_cond))
         il.append(il.set_flag(KalimbaFlags.C.name, il.const(0, 0)))
         il.append(il.set_flag(KalimbaFlags.N.name, n_cond))

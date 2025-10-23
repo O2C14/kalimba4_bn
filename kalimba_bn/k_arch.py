@@ -85,40 +85,56 @@ class KALIMBA(Architecture):
     #Actually used
     flags = [
         KalimbaFlags.Z.name,
-        KalimbaFlags.C.name,
         KalimbaFlags.N.name,
         KalimbaFlags.V.name,
+        KalimbaFlags.C.name,
         KalimbaFlags.UD.name
     ]
     flag_roles = {
         KalimbaFlags.Z.name: FlagRole.ZeroFlagRole,
-        KalimbaFlags.C.name: FlagRole.CarryFlagRole,
-        KalimbaFlags.N.name: FlagRole.SpecialFlagRole,
+        KalimbaFlags.N.name: FlagRole.NegativeSignFlagRole,
         KalimbaFlags.V.name: FlagRole.OverflowFlagRole,
+        KalimbaFlags.C.name: FlagRole.CarryFlagRole,
     }
 
     flag_write_types = [
-        '*','zn'
+        '*','zn','znvc'
     ]
 
     flags_written_by_flag_write_type = {
         '*' : [
             KalimbaFlags.Z.name,
-            KalimbaFlags.C.name,
             KalimbaFlags.N.name,
-            KalimbaFlags.V.name
+            KalimbaFlags.V.name,
+            KalimbaFlags.C.name,
         ],
         'zn' : [
             KalimbaFlags.Z.name,
             KalimbaFlags.N.name,
-        ]
+        ],
+        'znvc' : [
+            KalimbaFlags.Z.name,
+            KalimbaFlags.N.name,
+            KalimbaFlags.V.name,
+            KalimbaFlags.C.name,
+        ],
 	}
-    '''
+
     flags_required_for_flag_condition = {
-        LowLevelILFlagCondition.LLFC_E: [KalimbaFlags.Z.name], 
-        LowLevelILFlagCondition.LLFC_NE: [KalimbaFlags.Z.name],
+        LowLevelILFlagCondition.LLFC_E:   [KalimbaFlags.Z.name], 
+        LowLevelILFlagCondition.LLFC_NE:  [KalimbaFlags.Z.name],
+        LowLevelILFlagCondition.LLFC_NEG: [KalimbaFlags.N.name],
+        LowLevelILFlagCondition.LLFC_POS: [KalimbaFlags.N.name],
+        LowLevelILFlagCondition.LLFC_O:   [KalimbaFlags.V.name],
+        LowLevelILFlagCondition.LLFC_NO:  [KalimbaFlags.V.name],
+        LowLevelILFlagCondition.LLFC_UGT: [KalimbaFlags.C.name, KalimbaFlags.Z.name],
+        LowLevelILFlagCondition.LLFC_ULE: [KalimbaFlags.C.name, KalimbaFlags.Z.name],
+        LowLevelILFlagCondition.LLFC_SGE: [KalimbaFlags.N.name, KalimbaFlags.V.name],
+        LowLevelILFlagCondition.LLFC_SLT: [KalimbaFlags.N.name, KalimbaFlags.V.name],
+        LowLevelILFlagCondition.LLFC_SGT: [KalimbaFlags.Z.name, KalimbaFlags.N.name, KalimbaFlags.V.name],
+        LowLevelILFlagCondition.LLFC_SLE: [KalimbaFlags.Z.name, KalimbaFlags.N.name, KalimbaFlags.V.name],
 	}
-    '''
+
     stack_pointer = 'SP'
     link_reg = 'rLink'
     minim_offset = 0#0x180
