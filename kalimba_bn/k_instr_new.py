@@ -1073,12 +1073,12 @@ class KalimbaControlFlow:
 
         return f'KalimbaControlFlow("{cond}{n}{t}{m}")'
     def llil(self, il: LowLevelILFunction, addr: int, length: int):
-        # TODO DOLOOP
         if self.cond == KalimbaCond.Always:
             if isinstance(self.a, int):
                 dest = il.const(4, (self.a & -2) + addr)
             else:
-                dest = il.reg(4, self.a.name)
+                # TODO Variable offset of code section
+                dest = il.or_expr(4, il.reg(4, self.a.name), il.const(4, 0x80000000))
             if self.op == KalimbaOp.JUMP:
                 il.append(il.jump(dest))
             elif self.op == KalimbaOp.CALL:
@@ -1334,17 +1334,23 @@ class KalimbaSubWordMemAccess:
         else:
             raise ValueError(f'invalid mem op: {self.op}') # pragma: no cover
     def llil(self, il: LowLevelILFunction, addr: int, length: int):
+
         if isinstance(self.b, int):
-            if self.a != KalimbaBank1Reg.Null:
-                il_regb_k = il.const(4, self.b)
+            b_expr = il.const(4, self.b)
+        else:
+            if self.b != KalimbaBank1Reg.Null:
+                b_expr = il.reg(4, self.b.name)
             else:
-                il_regb_k = il.const(4, self.b & 0xffffffff)
-        else:
-            il_regb_k = il.reg(4, self.b.name)
+                b_expr = il.const(4, 0)
+
         if self.a != KalimbaBank1Reg.Null:
-            addr = il.add(4, il.reg(4, self.a.name), il_regb_k)
+            a_expr = il.reg(4, self.a.name)
         else:
-            addr = il_regb_k
+            a_expr = il.const(4, 0)
+            if isinstance(self.b, int):
+                b_expr = il.const(4, self.b & 0xffffffff)
+
+        addr = il.add(4, a_expr, b_expr)
         load_dic = {
             KalimbaSubWordMem.L_MBS: lambda il,addr:il.sign_extend(4, il.load(1, addr)),
             KalimbaSubWordMem.L_MBU: lambda il,addr:il.zero_extend(4, il.load(1, addr)),
@@ -1358,7 +1364,7 @@ class KalimbaSubWordMemAccess:
             KalimbaSubWordMem.S_M:lambda il,addr,src_expr: il.store(4, addr, src_expr)
         }
         if self.sel in load_dic:
-            src_expr = load_dic[self.sel](il,addr)
+            src_expr = load_dic[self.sel](il, addr)
             expr = il.set_reg(4, self.c.name, src_expr)
         if self.sel in store_dic:
             if self.c != KalimbaBank1Reg.Null:

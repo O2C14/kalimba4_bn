@@ -144,7 +144,8 @@ class KALIMBA(Architecture):
         dec_len, dec_data = kalimba_minim_decode(data, addr)
         result.length = dec_len
 
-        if (addr + dec_len) in self._doloop_dic_:
+        # doloop may cause multiple identical branches to appear
+        if (addr + dec_len) in self._doloop_dic_ and not isinstance(dec_data, KalimbaControlFlow):
             loop_length = self._doloop_dic_[addr + dec_len]
             result.add_branch(BranchType.TrueBranch, addr - (loop_length - dec_len))
             result.add_branch(BranchType.FalseBranch, addr + dec_len)
